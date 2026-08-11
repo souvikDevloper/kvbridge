@@ -1,0 +1,41 @@
+{
+  "name": "qwen3-14b-to-32b-paper-reproduction",
+  "source": {
+    "model_id": "Qwen/Qwen3-14B",
+    "revision": "f8c293d",
+    "tokenizer_hash": "RESOLVE_AND_PIN_AT_CALIBRATION",
+    "num_layers": 40,
+    "num_kv_heads": 8,
+    "head_dim": 128,
+    "attention_kind": "dense",
+    "architecture": "Qwen3ForCausalLM"
+  },
+  "target": {
+    "model_id": "Qwen/Qwen3-32B",
+    "revision": "e3a3f59b0423be17f9582d1755fd3d5449b31a1f",
+    "tokenizer_hash": "RESOLVE_AND_PIN_AT_CALIBRATION",
+    "num_layers": 64,
+    "num_kv_heads": 8,
+    "head_dim": 128,
+    "attention_kind": "dense",
+    "architecture": "Qwen3ForCausalLM"
+  },
+  "fit": {
+    "top_k": 8,
+    "ridge_alpha": 0.01,
+    "content_space": true,
+    "selection_alpha": 1e-06,
+    "accumulation_dtype": "float32",
+    "require_matched_kv": true,
+    "target_layer_block_size": 1,
+    "selection_target_layer_block_size": 8
+  },
+  "calibration": {
+    "dataset": "HuggingFaceFW/fineweb-edu",
+    "sequences": 500,
+    "tokens": 1024,
+    "stride": 4
+  },
+  "cache_dtype_bytes": 2,
+  "artifact_dtype_bytes": 4
+}

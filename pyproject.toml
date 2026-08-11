@@ -1,0 +1,72 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "kvbridge"
+version = "0.1.0"
+description = "Production-oriented cross-model KV-cache transfer via closed-form ridge mapping"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "Apache-2.0"
+authors = [{ name = "Souvik" }]
+keywords = ["llm", "inference", "kv-cache", "pytorch", "serving"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Developers",
+  "Intended Audience :: Science/Research",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+  "torch>=2.3",
+  "safetensors>=0.4.3",
+]
+
+[project.optional-dependencies]
+hf = [
+  "transformers>=4.53,<6",
+  "datasets>=3,<5",
+  "accelerate>=1,<2",
+]
+dev = [
+  "pytest>=8,<10",
+  "pytest-cov>=5,<8",
+  "ruff>=0.9,<1",
+  "mypy>=1.13,<2",
+]
+
+[project.scripts]
+kvbridge = "kvbridge.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/souvikDevloper/kvbridge"
+Repository = "https://github.com/souvikDevloper/kvbridge"
+Documentation = "https://github.com/souvikDevloper/kvbridge#readme"
+Issues = "https://github.com/souvikDevloper/kvbridge/issues"
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+addopts = "-ra --strict-markers --basetemp=.pytest-tmp"
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM"]
+
+[tool.mypy]
+python_version = "3.10"
+strict = true
+warn_unreachable = true

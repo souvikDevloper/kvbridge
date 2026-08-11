@@ -1,0 +1,40 @@
+{
+  "name": "local-cpu-reference",
+  "source": {
+    "model_id": "synthetic/source-8l",
+    "revision": "v1",
+    "tokenizer_hash": "synthetic-shared-v1",
+    "num_layers": 8,
+    "num_kv_heads": 4,
+    "head_dim": 16,
+    "attention_kind": "dense",
+    "architecture": "SyntheticDecoder"
+  },
+  "target": {
+    "model_id": "synthetic/target-6l",
+    "revision": "v1",
+    "tokenizer_hash": "synthetic-shared-v1",
+    "num_layers": 6,
+    "num_kv_heads": 4,
+    "head_dim": 16,
+    "attention_kind": "dense",
+    "architecture": "SyntheticDecoder"
+  },
+  "fit": {
+    "top_k": 2,
+    "ridge_alpha": 0.01,
+    "content_space": true,
+    "selection_alpha": 1e-06,
+    "accumulation_dtype": "float64",
+    "require_matched_kv": true,
+    "target_layer_block_size": 1,
+    "selection_target_layer_block_size": 2
+  },
+  "calibration": {
+    "sequences": 8,
+    "tokens": 256,
+    "stride": 1
+  },
+  "cache_dtype_bytes": 4,
+  "artifact_dtype_bytes": 4
+}

@@ -1,0 +1,69 @@
+{
+  "schema_version": 1,
+  "scope": "CPU synthetic structural validation; not a real-model quality claim",
+  "environment": {
+    "python": "3.10.11",
+    "torch": "2.8.0+cpu",
+    "platform": "Windows-10-10.0.26200-SP0",
+    "processor": "Intel64 Family 6 Model 154 Stepping 3, GenuineIntel",
+    "logical_cpus": 12,
+    "cuda_available": false,
+    "torch_threads": 8
+  },
+  "cases": [
+    {
+      "name": "micro",
+      "source_layers": 3,
+      "target_layers": 2,
+      "heads": 2,
+      "dim": 4,
+      "tokens": 64,
+      "pairs": 4,
+      "mapper_parameters": 288,
+      "fit_seconds": 0.012174000003142282,
+      "warmup_iterations": 10,
+      "timed_iterations": 100,
+      "map_ms_median": 0.3391999925952405,
+      "map_ms_p95": 0.37590001011267304,
+      "tokens_per_second": 188679.24940189996,
+      "evaluation_r2": 0.9999987346857415,
+      "selection_exact": true
+    },
+    {
+      "name": "small",
+      "source_layers": 5,
+      "target_layers": 4,
+      "heads": 2,
+      "dim": 8,
+      "tokens": 128,
+      "pairs": 4,
+      "mapper_parameters": 2176,
+      "fit_seconds": 0.042667899979278445,
+      "warmup_iterations": 10,
+      "timed_iterations": 100,
+      "map_ms_median": 0.7807000074535608,
+      "map_ms_p95": 1.0331999801564962,
+      "tokens_per_second": 163955.42305360353,
+      "evaluation_r2": 0.9999989452973791,
+      "selection_exact": true
+    },
+    {
+      "name": "medium",
+      "source_layers": 8,
+      "target_layers": 6,
+      "heads": 4,
+      "dim": 16,
+      "tokens": 256,
+      "pairs": 3,
+      "mapper_parameters": 49920,
+      "fit_seconds": 0.27981129998806864,
+      "warmup_iterations": 10,
+      "timed_iterations": 100,
+      "map_ms_median": 2.844100017682649,
+      "map_ms_p95": 3.2759000023361295,
+      "tokens_per_second": 90010.8991977669,
+      "evaluation_r2": 0.9999989168422706,
+      "selection_exact": true
+    }
+  ]
+}

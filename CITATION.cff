@@ -1,0 +1,18 @@
+cff-version: 1.2.0
+message: "If you use KVBridge, cite this software and the original NVIDIA paper."
+title: "KVBridge: Memory-Bounded Cross-Model KV-Cache Transfer"
+type: software
+version: 0.1.0
+date-released: 2026-08-08
+authors:
+  - given-names: Souvik
+license: Apache-2.0
+repository-code: "https://github.com/souvikDevloper/kvbridge"
+references:
+  - type: article
+    title: "Cross-Model KV Cache Transfer in LLM Families: A Closed-Form Linear Mapping for Prefill Reuse"
+    authors:
+      - family-names: Heo
+        given-names: Taekyung
+    year: 2026
+    url: "https://arxiv.org/abs/2608.03893"

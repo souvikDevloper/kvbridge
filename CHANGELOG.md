@@ -11,6 +11,7 @@
 - Added atomic evidence commits, per-shard SHA-256 records, and end-to-end evidence validation.
 - Added fail-closed stage resume and validated recovery from post-write evaluator teardown failures.
 - Added deterministic request-ID shadow sampling plus pre-map batch/token resource gates.
+- Added deterministic bootstrap intervals and paired-difference uncertainty helpers.
 - Pinned the tested Transformers major version and aligned the runtime package version with v0.2.0.
 - Modernized GitHub Actions to Node 24-based checkout/setup actions.
 

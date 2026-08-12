@@ -64,6 +64,7 @@ Primary quality endpoints are downstream retention and attention-output cosine. 
 
 - Publish per-task sample counts and confidence intervals for accuracy deltas.
 - Use paired bootstrap intervals where target and transfer score the same examples.
+- Publish the bootstrap confidence level, resample count, and seed; KVBridge records all three.
 - Report median, p95, and p99 latency with trial counts and warmup policy.
 - Keep raw JSON/CSV outputs and immutable manifests alongside tables.
 - Distinguish exploratory ablations from preregistered confirmatory runs.

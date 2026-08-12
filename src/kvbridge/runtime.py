@@ -85,7 +85,10 @@ class GuardedTransferEngine(Generic[T]):
         self.mapper = mapper
         self.policy = policy or GuardPolicy()
         self.event_sink = event_sink or (lambda _: None)
-        self.shadow_sampling = shadow_sampling or ShadowSamplingPolicy()
+        # Preserve the pre-sampling fail-closed contract: callers that provide a
+        # quality probe get that probe on every request unless they explicitly
+        # opt into a lower sampling rate.
+        self.shadow_sampling = shadow_sampling or ShadowSamplingPolicy(rate=1.0)
 
     def run(
         self,

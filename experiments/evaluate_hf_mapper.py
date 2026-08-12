@@ -28,6 +28,7 @@ from kvbridge.mapper import CrossModelKVMapper
 from kvbridge.metrics import attention_output_cosine, logit_kl_divergence
 from kvbridge.planning import ExperimentConfig, build_scale_plan
 from kvbridge.provenance import code_revision, package_versions
+from kvbridge.statistics import bootstrap_mean_interval
 from kvbridge.synthetic import cache_r2
 
 
@@ -77,7 +78,8 @@ def _summary(cases: list[dict[str, Any]]) -> dict[str, Any]:
     kl = [float(case["logit_kl"]) for case in cases]
     transfer = [float(case["transfer_ms"]) for case in cases]
     target_prefill = [float(case["target_prefix_prefill_ms"]) for case in cases]
-    return {
+    agreement = [float(bool(case["next_token_agreement"])) for case in cases]
+    summary = {
         "sequences": len(cases),
         "cache_r2_mean": sum(float(case["cache_r2"]) for case in cases) / len(cases),
         "attention_cosine_mean": sum(attention) / len(attention),
@@ -86,8 +88,7 @@ def _summary(cases: list[dict[str, Any]]) -> dict[str, Any]:
         ),
         "logit_kl_mean": sum(kl) / len(kl),
         "logit_kl_p95": _percentile(kl, 0.95),
-        "next_token_agreement": sum(bool(case["next_token_agreement"]) for case in cases)
-        / len(cases),
+        "next_token_agreement": sum(agreement) / len(cases),
         "transfer_ms_median": _percentile(transfer, 0.50),
         "transfer_ms_p95": _percentile(transfer, 0.95),
         "target_prefix_prefill_ms_median": _percentile(target_prefill, 0.50),
@@ -96,6 +97,15 @@ def _summary(cases: list[dict[str, Any]]) -> dict[str, Any]:
             0.50,
         ),
     }
+    summary["confidence_intervals"] = {
+        "cache_r2_mean": bootstrap_mean_interval(
+            [float(case["cache_r2"]) for case in cases], seed=101
+        ).to_dict(),
+        "attention_cosine_mean": bootstrap_mean_interval(attention, seed=102).to_dict(),
+        "logit_kl_mean": bootstrap_mean_interval(kl, seed=103).to_dict(),
+        "next_token_agreement": bootstrap_mean_interval(agreement, seed=104).to_dict(),
+    }
+    return summary
 
 
 def main() -> int:

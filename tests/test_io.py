@@ -17,6 +17,7 @@ from kvbridge.io import (
     load_calibration_shard,
     save_calibration_shard,
 )
+from kvbridge.statistics import bootstrap_mean_interval
 from kvbridge.synthetic import fit_demo, make_problem
 
 
@@ -170,6 +171,16 @@ def _complete_evidence(tmp_path: Path) -> tuple[Path, Path, Path, Path]:
         "attention_gate_passed": True,
         "logit_kl_gate_passed": True,
         "all_quality_gates_passed": True,
+        "confidence_intervals": {
+            "cache_r2_mean": bootstrap_mean_interval([0.8], resamples=100).to_dict(),
+            "attention_cosine_mean": bootstrap_mean_interval(
+                [0.95], resamples=100
+            ).to_dict(),
+            "logit_kl_mean": bootstrap_mean_interval([0.1], resamples=100).to_dict(),
+            "next_token_agreement": bootstrap_mean_interval(
+                [1.0], resamples=100
+            ).to_dict(),
+        },
     }
     result_path = tmp_path / "result.json"
     result = {
@@ -204,4 +215,14 @@ def test_result_evidence_recomputes_summary(tmp_path: Path) -> None:
     atomic_write_text(result_path, json.dumps(payload) + "\n")
 
     with pytest.raises(ArtifactError, match="summary metric is inconsistent"):
+        validate_result_evidence(config_path, calibration_dir, artifact_dir, result_path)
+
+
+def test_result_evidence_recomputes_confidence_interval(tmp_path: Path) -> None:
+    config_path, calibration_dir, artifact_dir, result_path = _complete_evidence(tmp_path)
+    payload = json.loads(result_path.read_text(encoding="utf-8"))
+    payload["summary"]["confidence_intervals"]["logit_kl_mean"]["high"] = 0.5
+    atomic_write_text(result_path, json.dumps(payload) + "\n")
+
+    with pytest.raises(ArtifactError, match="confidence interval is inconsistent"):
         validate_result_evidence(config_path, calibration_dir, artifact_dir, result_path)

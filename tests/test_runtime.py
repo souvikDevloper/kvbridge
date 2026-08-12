@@ -9,7 +9,6 @@ def test_guard_accepts_valid_transfer() -> None:
     engine = GuardedTransferEngine(
         fit_demo(problem),
         event_sink=events.append,
-        shadow_sampling=ShadowSamplingPolicy(rate=1.0),
     )
 
     result = engine.run(
@@ -50,7 +49,6 @@ def test_guard_emits_probe_metrics_and_falls_back() -> None:
     engine = GuardedTransferEngine(
         fit_demo(problem),
         event_sink=events.append,
-        shadow_sampling=ShadowSamplingPolicy(rate=1.0),
     )
 
     result = engine.run(
@@ -69,6 +67,7 @@ def test_guard_emits_probe_metrics_and_falls_back() -> None:
 
     assert result.status == "fallback"
     assert result.quality_probe is not None
+    assert events[0]["shadow_selected"] is True
     assert events[0]["quality_probe"] == "short_suffix_logit_kl"
     assert events[0]["quality_value"] == 0.2
 

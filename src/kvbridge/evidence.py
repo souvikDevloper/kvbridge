@@ -14,6 +14,7 @@ from safetensors import SafetensorError, safe_open
 from kvbridge.errors import ArtifactError
 from kvbridge.mapper import CrossModelKVMapper
 from kvbridge.planning import ExperimentConfig
+from kvbridge.statistics import bootstrap_mean_interval
 
 
 def sha256_file(path: str | Path) -> str:
@@ -262,6 +263,37 @@ def validate_result_evidence(
     }
     for name, value in expected.items():
         _require(_close(summary.get(name), value), f"summary metric is inconsistent: {name}")
+
+    intervals = summary.get("confidence_intervals")
+    if intervals is not None:
+        if not isinstance(intervals, dict):
+            raise ArtifactError("confidence intervals must contain a JSON object")
+        interval_inputs = {
+            "cache_r2_mean": cache_r2,
+            "attention_cosine_mean": attention,
+            "logit_kl_mean": kl,
+            "next_token_agreement": [
+                float(bool(case["next_token_agreement"])) for case in cases
+            ],
+        }
+        for name, values in interval_inputs.items():
+            record = intervals.get(name)
+            if not isinstance(record, dict):
+                raise ArtifactError(f"missing confidence interval: {name}")
+            try:
+                recomputed = bootstrap_mean_interval(
+                    values,
+                    confidence=float(record["confidence"]),
+                    resamples=int(record["resamples"]),
+                    seed=int(record["seed"]),
+                ).to_dict()
+            except (KeyError, TypeError, ValueError) as error:
+                raise ArtifactError(f"invalid confidence interval: {name}") from error
+            for field in ("low", "center", "high"):
+                _require(
+                    _close(record.get(field), float(recomputed[field])),
+                    f"confidence interval is inconsistent: {name}.{field}",
+                )
 
     evaluation = raw_config["evaluation"]
     attention_passed = expected["attention_cosine_min"] >= float(

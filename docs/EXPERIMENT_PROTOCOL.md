@@ -17,7 +17,14 @@ This protocol separates results executable on modest hardware from experiments r
 - Require visible fallback for rejected quality probes, NaN/Inf, magnitude violation, and latency violation.
 - Repeat on Python 3.10 and 3.12, Linux and Windows where available.
 
-## T1: small-model integration
+## T1: deterministic synthetic scale validation
+
+- Run the planted-affine model-family sweep at several depths, head widths, and token counts.
+- Require exact source-layer recovery and holdout cache R² > 0.999.
+- Measure warm/cold map latency and FP32/BF16 artifact size separately.
+- Label all results synthetic; do not infer real-model downstream retention.
+
+## T2: small-model integration
 
 Choose a same-family pair that fits the available accelerator and satisfies the shared-tokenizer/matched-KV/full-attention gates. Capture 50-200 general-domain calibration sequences. Verify:
 
@@ -30,7 +37,9 @@ Choose a same-family pair that fits the available accelerator and satisfies the 
 
 No small-model result should be extrapolated numerically to Qwen3 14B→32B.
 
-## T2: Qwen3 14B→32B reproduction
+Use the pinned 0.6B to 1.7B smoke configuration first, followed by 1.7B to 4B where memory permits. Record attention-output cosine, short-suffix logit KL, next-token agreement, target-prefill/transfer latency, peak VRAM, and every per-sequence value.
+
+## T3: Qwen3 14B→32B reproduction
 
 Use `configs/qwen3_14b_to_32b.paper.json`: 500 FineWeb-Edu sequences, 1,024 tokens, stride 4, ridge λ=0.01, top-k=8, BF16 forward, FP32 covariance. Match the source/target model commits in the config or record an intentional revision update.
 
@@ -38,7 +47,7 @@ Evaluate target standalone and transfer on ARC-Challenge, HellaSwag, WinoGrande,
 
 Latency uses 50 warmups and 30 timed trials for each context length from 64 to 32,768 tokens. Record cache movement and mapper execution together; target re-prefill excludes the LM head to match the source paper.
 
-## T3: new investigations
+## T4: new investigations
 
 Run a factorial ablation over:
 

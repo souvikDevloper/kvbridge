@@ -1,3 +1,4 @@
+import pytest
 import torch
 
 from kvbridge.ridge import RidgeAccumulator
@@ -30,3 +31,10 @@ def test_ridge_rejects_empty_solve() -> None:
         assert "at least two" in str(error)
     else:
         raise AssertionError("empty accumulator unexpectedly solved")
+
+
+def test_ridge_rejects_unavailable_cuda() -> None:
+    if torch.cuda.is_available():
+        pytest.skip("CUDA is available on this test host")
+    with pytest.raises(RuntimeError, match="CUDA.*unavailable"):
+        RidgeAccumulator(2, 1, device="cuda")

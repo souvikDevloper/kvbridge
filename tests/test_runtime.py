@@ -1,3 +1,4 @@
+from kvbridge.probes import QualityProbeResult
 from kvbridge.runtime import GuardedTransferEngine
 from kvbridge.synthetic import fit_demo, make_problem
 
@@ -37,3 +38,28 @@ def test_guard_falls_back_visibly() -> None:
     assert result.value == "prefilled"
     assert "quality gate" in result.reason
     assert events[0]["status"] == "fallback"
+
+
+def test_guard_emits_probe_metrics_and_falls_back() -> None:
+    problem = make_problem(calibration_pairs=4, tokens=12)
+    events = []
+    engine = GuardedTransferEngine(fit_demo(problem), event_sink=events.append)
+
+    result = engine.run(
+        problem.evaluation.source,
+        target_rotary=problem.evaluation.target.rotary,
+        accept=None,
+        on_accept=lambda _: "mapped",
+        fallback=lambda: "prefilled",
+        quality_probe=lambda _: QualityProbeResult(
+            name="short_suffix_logit_kl",
+            accepted=False,
+            value=0.2,
+            threshold=0.1,
+        ),
+    )
+
+    assert result.status == "fallback"
+    assert result.quality_probe is not None
+    assert events[0]["quality_probe"] == "short_suffix_logit_kl"
+    assert events[0]["quality_value"] == 0.2

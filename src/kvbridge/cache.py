@@ -123,6 +123,26 @@ class KVCache:
             keys_are_content=False,
         )
 
+    def sample_tokens(self, stride: int) -> KVCache:
+        """Return a deterministic token-strided view used by calibration fitting."""
+        if stride <= 0:
+            raise ValueError("token stride must be positive")
+        if stride == 1:
+            return self
+        rotary = None
+        if self.rotary is not None:
+            rotary = RotaryFactors(
+                self.rotary.cos[..., ::stride, :],
+                self.rotary.sin[..., ::stride, :],
+                self.rotary.interleaved,
+            )
+        return KVCache(
+            [item[:, :, ::stride, :] for item in self.keys],
+            [item[:, :, ::stride, :] for item in self.values],
+            rotary,
+            self.keys_are_content,
+        )
+
     def detach(self, *, device: str | torch.device = "cpu") -> KVCache:
         rotary = None
         if self.rotary is not None:

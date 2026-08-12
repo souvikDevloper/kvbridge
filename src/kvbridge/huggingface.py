@@ -9,7 +9,8 @@ from __future__ import annotations
 
 import hashlib
 import json
-from typing import Any
+from dataclasses import dataclass
+from typing import Any, cast
 
 import torch
 from torch import Tensor
@@ -18,6 +19,15 @@ from kvbridge.cache import KVCache, RotaryFactors
 from kvbridge.config import ModelSignature
 from kvbridge.errors import CompatibilityError
 from kvbridge.mapper import CrossModelKVMapper
+
+
+@dataclass(frozen=True, slots=True)
+class HFCapture:
+    """A target prefill capture used for attention-aware evaluation."""
+
+    cache: KVCache
+    queries: tuple[Tensor, ...]
+    logits: Tensor
 
 
 def tokenizer_fingerprint(tokenizer: Any) -> str:
@@ -89,6 +99,34 @@ def _legacy_layers(cache: Any) -> list[tuple[Tensor, Tensor]]:
     raise CompatibilityError("unsupported Transformers cache representation")
 
 
+def _decoder_layers(model: Any) -> Any:
+    candidates = [
+        getattr(getattr(model, "model", None), "layers", None),
+        getattr(getattr(getattr(model, "model", None), "model", None), "layers", None),
+    ]
+    for candidate in candidates:
+        if candidate is not None:
+            return candidate
+    raise CompatibilityError("model does not expose supported decoder layers")
+
+
+def _canonical_query(output: Any, *, query_heads: int, head_dim: int) -> Tensor:
+    if isinstance(output, tuple | list):
+        output = output[0]
+    if not isinstance(output, Tensor):
+        raise CompatibilityError("query hook did not emit a tensor")
+    if output.ndim == 3:
+        batch, tokens, features = output.shape
+        if features != query_heads * head_dim:
+            raise CompatibilityError("query projection width differs from model configuration")
+        return output.reshape(batch, tokens, query_heads, head_dim).permute(0, 2, 1, 3)
+    if output.ndim == 4 and output.shape[-2:] == (query_heads, head_dim):
+        return output.permute(0, 2, 1, 3)
+    if output.ndim == 4 and output.shape[1] == query_heads and output.shape[-1] == head_dim:
+        return output
+    raise CompatibilityError(f"unsupported query tensor shape: {tuple(output.shape)}")
+
+
 @torch.inference_mode()
 def capture_cache(
     model: Any, input_ids: Tensor, *, attention_mask: Tensor | None = None
@@ -115,6 +153,66 @@ def capture_cache(
     return KVCache([layer[0] for layer in layers], [layer[1] for layer in layers], rotary)
 
 
+@torch.inference_mode()
+def capture_cache_with_queries(
+    model: Any, input_ids: Tensor, *, attention_mask: Tensor | None = None
+) -> HFCapture:
+    """Capture target K/V, RoPE-applied Q, and logits in one reference prefill.
+
+    Qwen3 exposes per-head query normalization, so the hook is placed after
+    ``q_norm``. Llama-style models without that module fall back to ``q_proj``.
+    """
+    device = model.get_input_embeddings().weight.device
+    input_ids = input_ids.to(device)
+    batch, tokens = input_ids.shape
+    if attention_mask is None:
+        attention_mask = torch.ones((batch, tokens), dtype=torch.long, device=device)
+    else:
+        attention_mask = attention_mask.to(device)
+    position_ids = attention_mask.long().cumsum(-1) - 1
+    position_ids.masked_fill_(attention_mask == 0, 0)
+    query_heads = int(model.config.num_attention_heads)
+    head_dim = int(
+        getattr(model.config, "head_dim", model.config.hidden_size // query_heads)
+    )
+    raw_queries: list[Tensor | None] = [None] * int(model.config.num_hidden_layers)
+    handles = []
+    for layer_index, layer in enumerate(_decoder_layers(model)):
+        attention = layer.self_attn
+        query_module = getattr(attention, "q_norm", None) or attention.q_proj
+
+        def capture_query(
+            _module: Any,
+            _inputs: tuple[Any, ...],
+            output: Any,
+            *,
+            index: int = layer_index,
+        ) -> None:
+            raw_queries[index] = _canonical_query(
+                output, query_heads=query_heads, head_dim=head_dim
+            )
+
+        handles.append(query_module.register_forward_hook(capture_query))
+    try:
+        outputs = model(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            position_ids=position_ids,
+            use_cache=True,
+            return_dict=True,
+        )
+    finally:
+        for handle in handles:
+            handle.remove()
+    if any(query is None for query in raw_queries):
+        raise CompatibilityError("not every target layer emitted a query tensor")
+    rotary = capture_rotary_factors(model, position_ids)
+    queries = tuple(rotary.apply(query) for query in raw_queries if query is not None)
+    layers = _legacy_layers(outputs.past_key_values)
+    cache = KVCache([layer[0] for layer in layers], [layer[1] for layer in layers], rotary)
+    return HFCapture(cache=cache, queries=queries, logits=outputs.logits)
+
+
 def to_dynamic_cache(cache: KVCache, model: Any) -> Any:
     try:
         from transformers import DynamicCache
@@ -127,6 +225,41 @@ def to_dynamic_cache(cache: KVCache, model: Any) -> Any:
     for layer, (key, value) in enumerate(zip(cache.keys, cache.values, strict=True)):
         dynamic.update(key, value, layer)
     return dynamic
+
+
+@torch.inference_mode()
+def suffix_logits_from_cache(model: Any, cache: KVCache, suffix_input_ids: Tensor) -> Tensor:
+    """Consume a short suffix against an existing cache and return its logits."""
+    if suffix_input_ids.ndim != 2 or suffix_input_ids.shape[1] < 1:
+        raise ValueError("suffix_input_ids must be rank-2 with at least one token")
+    device = model.get_input_embeddings().weight.device
+    suffix_input_ids = suffix_input_ids.to(device)
+    cache = cache.to(device)
+    past = to_dynamic_cache(cache, model)
+    batch, suffix_tokens = suffix_input_ids.shape
+    prefix_tokens = cache.shape[3]
+    attention_mask = torch.ones(
+        (batch, prefix_tokens + suffix_tokens), dtype=torch.long, device=device
+    )
+    position_ids = torch.arange(
+        prefix_tokens, prefix_tokens + suffix_tokens, device=device
+    ).unsqueeze(0).expand(batch, -1)
+    cache_position = torch.arange(
+        prefix_tokens, prefix_tokens + suffix_tokens, device=device
+    )
+    kwargs = {
+        "input_ids": suffix_input_ids,
+        "attention_mask": attention_mask,
+        "position_ids": position_ids,
+        "past_key_values": past,
+        "use_cache": False,
+        "return_dict": True,
+    }
+    try:
+        outputs = model(cache_position=cache_position, **kwargs)
+    except TypeError:
+        outputs = model(**kwargs)
+    return cast(Tensor, outputs.logits)
 
 
 @torch.inference_mode()

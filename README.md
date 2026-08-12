@@ -19,14 +19,14 @@ The core algorithm is paper-faithful: target-layer-specific source selection, in
 | Paper mapper | Per-target-layer, per-target-head ridge maps for K and V |
 | Layer selection | Head-averaged single-source R², then top-k cross-layer features |
 | Position handling | Exact inverse/forward RoPE using factors emitted by each model |
-| Modest-host fitting | Configurable target-layer blocks and re-iterable calibration factories |
+| Modest-host fitting | Target-layer blocks, deterministic token stride, CPU/CUDA statistics |
 | Distributed path | Mergeable sufficient statistics plus `torch.distributed` all-reduce |
 | Data plane | SafeTensors calibration shards; no pickle deserialization |
-| Artifact plane | Atomic writes, schema versioning, SHA-256 verification, model fingerprints |
-| Runtime safety | Shape/architecture gates, finite/magnitude/latency gates, explicit fallback |
+| Artifact plane | Atomic writes, SHA-256, model fingerprints, measured FP32/BF16 storage |
+| Runtime safety | Shape/architecture/numerical/latency/logit-KL gates, explicit fallback |
 | Integration | Qwen/Llama-style Hugging Face `DynamicCache` handoff adapter |
 | Operations | JSON resource planner, structured handoff events, CI, package build |
-| Research | Local scale results, multi-lab protocol, DOCX/PDF follow-up paper |
+| Research | Attention-output metrics, pinned T2 jobs, local results, multi-lab protocol |
 
 ## Thirty-second proof
 
@@ -102,6 +102,8 @@ mapper.save("artifacts/qwen3-14b-to-32b")
 
 The factory is re-iterable because memory-bounded fitting makes several deterministic passes. Increase block sizes on high-memory nodes to reduce I/O.
 
+For GPU fitting, set `accumulation_device="cuda"`. Artifact compression and runtime compute precision are separate: a BF16 artifact can be loaded once with `mapper.to("cuda", dtype=torch.float32)` on hardware without native BF16 execution. The serving hot path then reuses resident weights instead of transferring them per request.
+
 ## Live Hugging Face handoff
 
 ```python
@@ -144,6 +146,18 @@ Production rollout should progress through:
 | T4 | Multi-lab | Long-context, quantized, distribution-shift study | Proposed protocol |
 
 See [architecture](docs/ARCHITECTURE.md), [experiment protocol](docs/EXPERIMENT_PROTOCOL.md), [threat model](docs/THREAT_MODEL.md), and [production checklist](docs/PRODUCTION_CHECKLIST.md).
+
+### Free-GPU real-model path
+
+The pinned `configs/qwen3_0.6b_to_1.7b.t2-smoke.json` job is sized for a free 16 GB-class notebook GPU. It captures revision-pinned FineWeb-Edu shards, fits on CUDA, saves a BF16 artifact, and evaluates real target-query attention cosine plus shadow-prefill logit KL. On Kaggle:
+
+```bash
+git clone https://github.com/souvikDevloper/kvbridge.git
+cd kvbridge
+bash scripts/kaggle_t2_smoke.sh
+```
+
+See the [free-GPU runbook](docs/FREE_GPU_T2.md). The repository does not call this successful until the raw result exists and its preregistered gates pass.
 
 ## Development
 

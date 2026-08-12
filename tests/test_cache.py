@@ -25,3 +25,19 @@ def test_content_space_requires_factors() -> None:
     cache = KVCache([torch.zeros(1, 2, 3, 4)], [torch.zeros(1, 2, 3, 4)])
     with pytest.raises(CacheValidationError, match="requires captured RoPE"):
         cache.to_content_space()
+
+
+def test_token_sampling_keeps_rotary_alignment() -> None:
+    factors = rotary_factors(9, 4, theta=10_000.0)
+    cache = KVCache(
+        [torch.randn(1, 2, 9, 4)],
+        [torch.randn(1, 2, 9, 4)],
+        factors,
+    )
+
+    sampled = cache.sample_tokens(3)
+
+    assert sampled.shape == (1, 1, 2, 3, 4)
+    torch.testing.assert_close(sampled.rotary.cos, factors.cos[:, ::3])
+    with pytest.raises(ValueError, match="positive"):
+        cache.sample_tokens(0)

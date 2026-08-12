@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "scope": "CPU synthetic artifact-precision validation; not a real-model quality or GPU claim",
+  "environment": {
+    "python": "3.10.11",
+    "torch": "2.8.0+cpu",
+    "platform": "Windows-10-10.0.26200-SP0",
+    "cuda_available": false
+  },
+  "problem": {
+    "source_layers": 8,
+    "target_layers": 6,
+    "kv_heads": 4,
+    "query_heads": 8,
+    "head_dim": 16,
+    "tokens": 128,
+    "calibration_pairs": 4
+  },
+  "variants": [
+    {
+      "storage_dtype": "float32",
+      "file_bytes": 201608,
+      "tensor_bytes": 199680,
+      "size_ratio_to_fp32": 1.0,
+      "cache_r2": 0.9999988703755063,
+      "attention_output_cosine_mean": 0.9999990661938986,
+      "attention_output_cosine_min": 0.9999990463256836,
+      "attention_cosine_delta_from_fp32": 0.0
+    },
+    {
+      "storage_dtype": "bfloat16",
+      "file_bytes": 101760,
+      "tensor_bytes": 99840,
+      "size_ratio_to_fp32": 0.5047418753224079,
+      "cache_r2": 0.9999961004481304,
+      "attention_output_cosine_mean": 0.9999965926011404,
+      "attention_output_cosine_min": 0.9999961853027344,
+      "attention_cosine_delta_from_fp32": -2.473592758178711e-06
+    }
+  ]
+}

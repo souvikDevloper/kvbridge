@@ -28,14 +28,17 @@ class ExperimentConfig:
     @classmethod
     def load(cls, path: str | Path) -> ExperimentConfig:
         payload = json.loads(Path(path).read_text(encoding="utf-8"))
+        calibration = payload["calibration"]
+        fit_payload = dict(payload["fit"])
+        fit_payload.setdefault("token_stride", int(calibration.get("stride", 1)))
         return cls(
             name=payload["name"],
             source=ModelSignature.from_dict(payload["source"]),
             target=ModelSignature.from_dict(payload["target"]),
-            fit=FitConfig.from_dict(payload["fit"]),
-            calibration_sequences=int(payload["calibration"]["sequences"]),
-            calibration_tokens=int(payload["calibration"]["tokens"]),
-            token_stride=int(payload["calibration"].get("stride", 4)),
+            fit=FitConfig.from_dict(fit_payload),
+            calibration_sequences=int(calibration["sequences"]),
+            calibration_tokens=int(calibration["tokens"]),
+            token_stride=int(calibration.get("stride", 1)),
             cache_dtype_bytes=int(payload.get("cache_dtype_bytes", 2)),
             artifact_dtype_bytes=int(payload.get("artifact_dtype_bytes", 4)),
         )
@@ -72,6 +75,8 @@ def _cache_bytes(signature: ModelSignature, sequences: int, tokens: int, dtype_b
 
 def build_scale_plan(config: ExperimentConfig) -> ScalePlan:
     config.source.validate_pair(config.target, require_matched_kv=config.fit.require_matched_kv)
+    if config.token_stride != config.fit.token_stride:
+        raise ValueError("planner calibration stride and fitter token_stride must match")
     k = min(config.fit.top_k, config.source.num_layers)
     source_features = k * config.source.num_kv_heads * config.source.head_dim
     target_features = config.target.num_kv_heads * config.target.head_dim

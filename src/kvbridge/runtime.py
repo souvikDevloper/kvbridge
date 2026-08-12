@@ -10,6 +10,7 @@ from typing import Generic, Literal, TypeVar
 
 from kvbridge.cache import KVCache, RotaryFactors
 from kvbridge.mapper import CrossModelKVMapper, TransferReport
+from kvbridge.probes import QualityProbeResult
 
 T = TypeVar("T")
 TransferStatus = Literal["accepted", "fallback"]
@@ -33,6 +34,7 @@ class GuardedResult(Generic[T]):
     status: TransferStatus
     reason: str
     transfer_report: TransferReport | None
+    quality_probe: QualityProbeResult | None
     total_elapsed_ms: float
 
 
@@ -58,9 +60,12 @@ class GuardedTransferEngine(Generic[T]):
         accept: Callable[[KVCache], bool] | None,
         on_accept: Callable[[KVCache], T],
         fallback: Callable[[], T],
+        quality_probe: Callable[[KVCache], QualityProbeResult] | None = None,
     ) -> GuardedResult[T]:
         started = time.perf_counter()
         transfer_report: TransferReport | None = None
+        probe_result: QualityProbeResult | None = None
+        status: TransferStatus
         reason = "transfer passed all configured gates"
         try:
             mapped, transfer_report = self.mapper.transfer(source, target_rotary=target_rotary)
@@ -83,6 +88,13 @@ class GuardedTransferEngine(Generic[T]):
                 raise TimeoutError("transfer exceeded its latency budget")
             if accept is not None and not accept(mapped):
                 raise ValueError("application quality gate rejected the mapped cache")
+            if quality_probe is not None:
+                probe_result = quality_probe(mapped)
+                if not probe_result.accepted:
+                    raise ValueError(
+                        f"quality probe {probe_result.name} rejected mapped cache: "
+                        f"{probe_result.value:.6g} exceeds {probe_result.threshold:.6g}"
+                    )
             value, status = on_accept(mapped), "accepted"
         except (
             Exception
@@ -90,15 +102,17 @@ class GuardedTransferEngine(Generic[T]):
             reason = f"{type(error).__name__}: {error}"
             value, status = fallback(), "fallback"
         elapsed = (time.perf_counter() - started) * 1000
-        self.event_sink(
-            {
-                "event": "kvbridge_handoff",
-                "status": status,
-                "reason": reason,
-                "source_model": self.mapper.source_signature.model_id,
-                "target_model": self.mapper.target_signature.model_id,
-                "tokens": source.shape[3],
-                "elapsed_ms": elapsed,
-            }
-        )
-        return GuardedResult(value, status, reason, transfer_report, elapsed)
+        event: dict[str, object] = {
+            "event": "kvbridge_handoff",
+            "status": status,
+            "reason": reason,
+            "source_model": self.mapper.source_signature.model_id,
+            "target_model": self.mapper.target_signature.model_id,
+            "tokens": source.shape[3],
+            "elapsed_ms": elapsed,
+            "transfer_ms": transfer_report.elapsed_ms if transfer_report is not None else None,
+        }
+        if probe_result is not None:
+            event.update(probe_result.event_fields())
+        self.event_sink(event)
+        return GuardedResult(value, status, reason, transfer_report, probe_result, elapsed)

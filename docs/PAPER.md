@@ -2,7 +2,7 @@
 
 **Souvik**<br>
 Independent Researcher<br>
-Technical Report v0.1 - 8 August 2026
+Technical Report v0.2 - 12 August 2026
 
 ## Abstract
 
@@ -25,7 +25,7 @@ Our contributions are:
 1. A paper-faithful PyTorch implementation of top-k cross-layer, cross-head, per-target-head ridge mapping for K and V.
 2. A memory-bounded fit that retains mergeable sufficient statistics, reopens out-of-core calibration shards, and processes configurable target-layer blocks.
 3. An exact RoPE boundary that consumes cosine and sine factors emitted by each model, avoiding incomplete reimplementations of Llama-3, YaRN, or dynamic scaling.
-4. A typed artifact and serving contract with revision/tokenizer fingerprints, SafeTensors, integrity verification, atomic writes, numerical gates, structured events, and full-prefill fallback.
+4. A typed artifact and serving contract with revision/tokenizer fingerprints, SafeTensors, integrity verification, atomic writes, numerical gates, short-suffix logit-KL probes, structured events, and full-prefill fallback.
 5. A resource planner, CPU validation suite, and staged multi-lab protocol that make executed evidence and future experiments visibly distinct.
 
 ## 2. Background and related work
@@ -80,7 +80,7 @@ Checksums detect modification when the manifest is trusted; they do not authenti
 
 For first-token correctness, the Hugging Face handoff retains the final prompt token. The source prefills the preceding prefix; KVBridge maps that prefix; the target consumes the held-back token against the mapped cache and produces the first target logits. Later tokens use the target's normal dynamic cache.
 
-The guarded runtime validates finiteness, magnitude, latency budget, and an application-defined acceptance probe. Any rejection or backend exception calls full target prefill and emits an event containing status, reason, model pair, token count, and elapsed time. Silent degradation is explicitly disallowed.
+The guarded runtime validates finiteness, magnitude, latency budget, and an application-defined acceptance probe. A concrete short-suffix logit-KL policy supports sampled shadow comparison against full target prefill without placing raw logits in telemetry. Any rejection or backend exception calls full target prefill and emits an event containing status, reason, model pair, token count, and elapsed time. Silent degradation is explicitly disallowed.
 
 ## 4. Evaluation methodology
 
@@ -101,9 +101,13 @@ Each case creates random source keys and values, chooses one predictive source l
 
 Latency measurements use 10 warmups and 100 timed mappings. They run on Windows, Python 3.10.11, CPU-only PyTorch 2.8.0, eight PyTorch threads, and a 12-logical-core Intel processor. Timings describe this reference environment only.
 
-### 4.3 Software tests
+### 4.3 Artifact-precision evidence
 
-The 18-test suite covers split-half and interleaved RoPE round trips, invalid cache shapes, missing factors, affine ridge recovery, accumulator merging, deterministic tokenizer fingerprints, compatibility rejection, source selection, unseen-sequence mapping, SafeTensors round trips, tamper detection, re-iterable calibration shards, resource formulas, runtime acceptance, and visible fallback.
+The FP32/BF16 experiment saves and reloads the same fitted mapper, then evaluates unseen-cache R² and attention-output cosine under identical grouped-query attention. BF16 reduced the SafeTensors file from 201,608 to 101,760 bytes (50.47% of FP32). Mean attention-output cosine changed from 0.99999907 to 0.99999659, a delta of -0.00000247, on the synthetic case. This supports compact artifact transport in the tested linear setting; it is not evidence that BF16 preserves real-model task accuracy.
+
+### 4.4 Software tests
+
+The 30-test suite covers split-half and interleaved RoPE round trips, invalid cache shapes, missing factors, affine ridge recovery, accumulator merging, deterministic tokenizer fingerprints, compatibility rejection, source selection, unseen-sequence mapping, token-strided fitting, CPU/CUDA accumulation rejection, attention-output metrics, logit-KL policy, BF16 artifacts, device residency, SafeTensors round trips, tamper detection, re-iterable calibration shards, resource formulas, runtime acceptance, and visible fallback.
 
 ### 4.4 Reproducibility controls
 

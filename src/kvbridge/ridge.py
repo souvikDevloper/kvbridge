@@ -23,38 +23,52 @@ class RidgeAccumulator:
     all-reduce in a distributed job. Float64 is the safe default for the solve.
     """
 
-    def __init__(self, x_features: int, y_features: int, *, dtype: torch.dtype = torch.float64):
+    def __init__(
+        self,
+        x_features: int,
+        y_features: int,
+        *,
+        dtype: torch.dtype = torch.float64,
+        device: str | torch.device = "cpu",
+    ):
         if x_features <= 0 or y_features <= 0:
             raise ValueError("feature dimensions must be positive")
+        resolved_device = torch.device(device)
+        if resolved_device.type not in {"cpu", "cuda"}:
+            raise ValueError("ridge accumulation device must be cpu or cuda")
+        if resolved_device.type == "cuda" and not torch.cuda.is_available():
+            raise RuntimeError("CUDA ridge accumulation requested but CUDA is unavailable")
         self.x_features = x_features
         self.y_features = y_features
         self.dtype = dtype
+        self.device = resolved_device
         self.count = 0
-        self.sum_x = torch.zeros(x_features, dtype=dtype)
-        self.sum_y = torch.zeros(y_features, dtype=dtype)
-        self.xtx = torch.zeros((x_features, x_features), dtype=dtype)
-        self.xty = torch.zeros((x_features, y_features), dtype=dtype)
-        self.yty = torch.zeros((), dtype=dtype)
+        self.sum_x = torch.zeros(x_features, dtype=dtype, device=resolved_device)
+        self.sum_y = torch.zeros(y_features, dtype=dtype, device=resolved_device)
+        self.xtx = torch.zeros((x_features, x_features), dtype=dtype, device=resolved_device)
+        self.xty = torch.zeros((x_features, y_features), dtype=dtype, device=resolved_device)
+        self.yty = torch.zeros((), dtype=dtype, device=resolved_device)
 
     def update(self, x: Tensor, y: Tensor) -> None:
         if x.ndim != 2 or y.ndim != 2 or x.shape[0] != y.shape[0]:
             raise ValueError("x and y must be rank-2 with equal observation counts")
         if x.shape[1] != self.x_features or y.shape[1] != self.y_features:
             raise ValueError("feature count differs from accumulator configuration")
-        x64 = x.detach().to(device="cpu", dtype=self.dtype)
-        y64 = y.detach().to(device="cpu", dtype=self.dtype)
-        self.count += x64.shape[0]
-        self.sum_x += x64.sum(dim=0)
-        self.sum_y += y64.sum(dim=0)
-        self.xtx += x64.T @ x64
-        self.xty += x64.T @ y64
-        self.yty += (y64 * y64).sum()
+        x_acc = x.detach().to(device=self.device, dtype=self.dtype)
+        y_acc = y.detach().to(device=self.device, dtype=self.dtype)
+        self.count += x_acc.shape[0]
+        self.sum_x += x_acc.sum(dim=0)
+        self.sum_y += y_acc.sum(dim=0)
+        self.xtx += x_acc.T @ x_acc
+        self.xty += x_acc.T @ y_acc
+        self.yty += (y_acc * y_acc).sum()
 
     def merge(self, other: RidgeAccumulator) -> RidgeAccumulator:
-        if (self.x_features, self.y_features, self.dtype) != (
+        if (self.x_features, self.y_features, self.dtype, self.device) != (
             other.x_features,
             other.y_features,
             other.dtype,
+            other.device,
         ):
             raise ValueError("only like-shaped accumulators can be merged")
         self.count += other.count
@@ -80,7 +94,7 @@ class RidgeAccumulator:
         """Sum sufficient statistics across an initialized torch.distributed group."""
         if not torch.distributed.is_available() or not torch.distributed.is_initialized():
             raise RuntimeError("torch.distributed must be initialized before all_reduce_")
-        count = torch.tensor(self.count, dtype=torch.int64)
+        count = torch.tensor(self.count, dtype=torch.int64, device=self.device)
         torch.distributed.all_reduce(count)
         for tensor in (self.sum_x, self.sum_y, self.xtx, self.xty, self.yty):
             torch.distributed.all_reduce(tensor)
@@ -93,10 +107,12 @@ class RidgeAccumulator:
         mean_x, mean_y = self.sum_x / self.count, self.sum_y / self.count
         centered_xtx = self.xtx - self.count * torch.outer(mean_x, mean_x)
         centered_xty = self.xty - self.count * torch.outer(mean_x, mean_y)
-        system = centered_xtx + alpha * torch.eye(self.x_features, dtype=self.dtype)
+        system = centered_xtx + alpha * torch.eye(
+            self.x_features, dtype=self.dtype, device=self.device
+        )
         try:
             weight = torch.linalg.solve(system, centered_xty)
-        except torch.linalg.LinAlgError:
+        except torch.linalg.LinAlgError:  # type: ignore[attr-defined]
             weight = torch.linalg.lstsq(system, centered_xty).solution
         bias = mean_y - mean_x @ weight
 

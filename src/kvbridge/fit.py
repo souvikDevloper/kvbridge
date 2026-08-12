@@ -54,10 +54,16 @@ def _validate_example(
         raise ValueError(f"calibration pair {index} does not align batch/token axes")
 
 
-def _content_pair(pair: CalibrationPair, enabled: bool) -> CalibrationPair:
-    if not enabled:
-        return pair
-    return CalibrationPair(pair.source.to_content_space(), pair.target.to_content_space())
+def _prepare_pair(
+    pair: CalibrationPair, config: FitConfig, device: torch.device
+) -> CalibrationPair:
+    pair = CalibrationPair(pair.source.to(device), pair.target.to(device))
+    if config.content_space:
+        pair = CalibrationPair(pair.source.to_content_space(), pair.target.to_content_space())
+    return CalibrationPair(
+        pair.source.sample_tokens(config.token_stride),
+        pair.target.sample_tokens(config.token_stride),
+    )
 
 
 def _select_layers(
@@ -66,6 +72,7 @@ def _select_layers(
     target: ModelSignature,
     config: FitConfig,
     dtype: torch.dtype,
+    device: torch.device,
 ) -> tuple[list[list[int]], list[list[float]]]:
     """Select source layers by key/value, head-averaged single-source R²."""
     selected: list[list[int]] = [[] for _ in range(target.num_layers)]
@@ -79,12 +86,12 @@ def _select_layers(
                 for head in range(target.num_kv_heads):
                     for kind in ("key", "value"):
                         accumulators[(target_layer, source_layer, head, kind)] = RidgeAccumulator(
-                            source.head_dim, target.head_dim, dtype=dtype
+                            source.head_dim, target.head_dim, dtype=dtype, device=device
                         )
         pair_count = 0
         for pair_index, raw_pair in enumerate(_iterate(examples)):
             _validate_example(raw_pair, pair_index, source, target)
-            pair = _content_pair(raw_pair, config.content_space)
+            pair = _prepare_pair(raw_pair, config, device)
             pair_count += 1
             for target_layer in block:
                 for source_layer in range(source.num_layers):
@@ -134,8 +141,11 @@ def fit_mapper(
             "unmatched-KV selection is intentionally outside the validated v0.1 path"
         )
     dtype = torch.float64 if config.accumulation_dtype == "float64" else torch.float32
+    device = torch.device(config.accumulation_device)
+    if device.type == "cuda" and not torch.cuda.is_available():
+        raise RuntimeError("CUDA accumulation requested by FitConfig but CUDA is unavailable")
     selected, selection_scores = _select_layers(
-        examples, source_signature, target_signature, config, dtype
+        examples, source_signature, target_signature, config, dtype, device
     )
 
     layers = target_signature.num_layers
@@ -158,15 +168,15 @@ def fit_mapper(
             )
             output_count = target_signature.num_kv_heads * target_signature.head_dim
             key_accumulators[target_layer] = RidgeAccumulator(
-                feature_count, output_count, dtype=dtype
+                feature_count, output_count, dtype=dtype, device=device
             )
             value_accumulators[target_layer] = RidgeAccumulator(
-                feature_count, output_count, dtype=dtype
+                feature_count, output_count, dtype=dtype, device=device
             )
         second_pass_count = 0
         for pair_index, raw_pair in enumerate(_iterate(examples)):
             _validate_example(raw_pair, pair_index, source_signature, target_signature)
-            pair = _content_pair(raw_pair, config.content_space)
+            pair = _prepare_pair(raw_pair, config, device)
             second_pass_count += 1
             for target_layer in block:
                 source_layers = selected[target_layer]
@@ -196,6 +206,7 @@ def fit_mapper(
                 )
                 .permute(1, 0, 2)
                 .float()
+                .cpu()
                 .contiguous()
             )
             value_weights[target_layer] = (
@@ -204,11 +215,13 @@ def fit_mapper(
                 )
                 .permute(1, 0, 2)
                 .float()
+                .cpu()
                 .contiguous()
             )
             key_biases[target_layer] = (
                 key_solution.bias.reshape(target_signature.num_kv_heads, target_signature.head_dim)
                 .float()
+                .cpu()
                 .contiguous()
             )
             value_biases[target_layer] = (
@@ -216,6 +229,7 @@ def fit_mapper(
                     target_signature.num_kv_heads, target_signature.head_dim
                 )
                 .float()
+                .cpu()
                 .contiguous()
             )
             key_r2[target_layer] = key_solution.r2

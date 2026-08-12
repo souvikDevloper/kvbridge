@@ -12,4 +12,5 @@ def test_qwen_plan_matches_paper_mapper_footprint() -> None:
     assert plan.mapper_parameters == 1_073_872_896
     assert 4.0 <= plan.mapper_gib < 4.01
     assert plan.observations == 128_000
+    assert config.fit.token_stride == 4
     assert plan.fit_block_working_set_gib < 0.6

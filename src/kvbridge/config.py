@@ -74,9 +74,11 @@ class FitConfig:
     content_space: bool = True
     selection_alpha: float = 1e-6
     accumulation_dtype: str = "float64"
+    accumulation_device: str = "cpu"
     require_matched_kv: bool = True
     target_layer_block_size: int = 1
     selection_target_layer_block_size: int = 1
+    token_stride: int = 1
 
     def __post_init__(self) -> None:
         if self.top_k <= 0:
@@ -85,10 +87,14 @@ class FitConfig:
             raise ValueError("ridge penalties cannot be negative")
         if self.accumulation_dtype not in {"float32", "float64"}:
             raise ValueError("accumulation_dtype must be float32 or float64")
+        if self.accumulation_device not in {"cpu", "cuda"}:
+            raise ValueError("accumulation_device must be cpu or cuda")
         if self.target_layer_block_size <= 0:
             raise ValueError("target_layer_block_size must be positive")
         if self.selection_target_layer_block_size <= 0:
             raise ValueError("selection_target_layer_block_size must be positive")
+        if self.token_stride <= 0:
+            raise ValueError("token_stride must be positive")
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

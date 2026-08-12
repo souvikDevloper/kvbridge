@@ -215,7 +215,7 @@ def capture_cache_with_queries(
 
 def to_dynamic_cache(cache: KVCache, model: Any) -> Any:
     try:
-        from transformers import DynamicCache
+        from transformers import DynamicCache  # type: ignore[import-not-found, unused-ignore]
     except ImportError as error:  # pragma: no cover - exercised in HF integration environment
         raise RuntimeError("install kvbridge[hf] to use the Hugging Face adapter") from error
     try:

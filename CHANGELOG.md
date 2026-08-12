@@ -8,6 +8,10 @@
 - Added one-time mapper device residency to avoid per-request artifact transfers.
 - Added pinned Qwen3 0.6B to 1.7B and 1.7B to 4B T2 configurations.
 - Added dry-run-safe real-model capture, fit, and evaluation jobs with immutable provenance.
+- Added atomic evidence commits, per-shard SHA-256 records, and end-to-end evidence validation.
+- Added fail-closed stage resume and validated recovery from post-write evaluator teardown failures.
+- Added deterministic request-ID shadow sampling plus pre-map batch/token resource gates.
+- Pinned the tested Transformers major version and aligned the runtime package version with v0.2.0.
 - Modernized GitHub Actions to Node 24-based checkout/setup actions.
 
 ## 0.1.0 - 2026-08-08

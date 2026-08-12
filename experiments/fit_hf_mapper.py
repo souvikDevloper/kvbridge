@@ -16,10 +16,11 @@ from typing import Any
 import torch
 
 from kvbridge.config import ModelSignature
+from kvbridge.evidence import validate_capture_evidence
 from kvbridge.fit import fit_mapper
-from kvbridge.io import calibration_shard_factory
+from kvbridge.io import atomic_write_text, calibration_shard_factory
 from kvbridge.planning import ExperimentConfig, build_scale_plan
-from kvbridge.provenance import code_revision
+from kvbridge.provenance import code_revision, package_versions
 
 
 def _sha256(path: Path) -> str:
@@ -61,9 +62,8 @@ def main() -> int:
         raise RuntimeError("output directory must be empty to prevent artifact mixing")
 
     manifest_path = args.calibration_dir / "capture_manifest.json"
+    capture_report = validate_capture_evidence(args.config, args.calibration_dir)
     capture = _load_manifest(manifest_path)
-    if capture.get("config_sha256") != _sha256(args.config):
-        raise RuntimeError("capture manifest config hash differs from the requested config")
     shard_paths = sorted(args.calibration_dir.glob("*.safetensors"))
     if len(shard_paths) != config.calibration_sequences:
         raise RuntimeError(
@@ -90,13 +90,18 @@ def main() -> int:
     raw_config = json.loads(args.config.read_text(encoding="utf-8"))
     storage_dtype = args.storage_dtype or raw_config.get("artifact_storage_dtype", "bfloat16")
     mapper.save(args.output_dir, storage_dtype=storage_dtype)
+    calibration_bytes = sum(path.stat().st_size for path in shard_paths)
     fit_run = {
         "schema_version": 1,
         "evidence_tier": raw_config.get("evidence_tier", "T2"),
         "code_revision": code_revision(),
         "config_sha256": _sha256(args.config),
-        "capture_manifest_sha256": _sha256(manifest_path),
+        "capture_manifest_sha256": capture_report["manifest_sha256"],
         "calibration_shards": len(shard_paths),
+        "calibration_bytes": calibration_bytes,
+        "calibration_data_passes": plan.calibration_data_passes,
+        "estimated_calibration_bytes_read": calibration_bytes
+        * plan.calibration_data_passes,
         "elapsed_seconds": elapsed_seconds,
         "artifact_storage_dtype": storage_dtype,
         "fit_key_r2_mean": sum(mapper.fit_key_r2) / len(mapper.fit_key_r2),
@@ -109,10 +114,12 @@ def main() -> int:
             "cuda_peak_memory_bytes": (
                 torch.cuda.max_memory_allocated() if torch.cuda.is_available() else 0
             ),
+            "packages": package_versions(("safetensors", "numpy")),
         },
     }
-    (args.output_dir / "fit_run.json").write_text(
-        json.dumps(fit_run, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    atomic_write_text(
+        args.output_dir / "fit_run.json",
+        json.dumps(fit_run, indent=2, sort_keys=True) + "\n",
     )
     print(json.dumps(fit_run, indent=2))
     return 0

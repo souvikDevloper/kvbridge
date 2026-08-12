@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
 
@@ -25,3 +26,14 @@ def code_revision(repository: str | Path | None = None) -> str:
     except (OSError, subprocess.SubprocessError):
         return "unknown"
     return result.stdout.strip() or "unknown"
+
+
+def package_versions(names: tuple[str, ...]) -> dict[str, str]:
+    """Resolve installed distribution versions without importing optional packages."""
+    resolved: dict[str, str] = {}
+    for name in names:
+        try:
+            resolved[name] = version(name)
+        except PackageNotFoundError:
+            resolved[name] = "not-installed"
+    return resolved

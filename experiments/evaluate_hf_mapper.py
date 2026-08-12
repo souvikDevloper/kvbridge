@@ -6,6 +6,7 @@ Dry-run is the default. Execution writes a provenance-rich raw JSON artifact.
 from __future__ import annotations
 
 import argparse
+import gc
 import hashlib
 import json
 import platform
@@ -22,10 +23,11 @@ from kvbridge.huggingface import (
     suffix_logits_from_cache,
     tokenizer_fingerprint,
 )
+from kvbridge.io import atomic_write_text
 from kvbridge.mapper import CrossModelKVMapper
 from kvbridge.metrics import attention_output_cosine, logit_kl_divergence
 from kvbridge.planning import ExperimentConfig, build_scale_plan
-from kvbridge.provenance import code_revision
+from kvbridge.provenance import code_revision, package_versions
 from kvbridge.synthetic import cache_r2
 
 
@@ -281,6 +283,9 @@ def main() -> int:
             "cuda_peak_memory_bytes": torch.cuda.max_memory_allocated(),
             "model_dtype": str(dtype).removeprefix("torch."),
             "attention_implementation": args.attn_implementation,
+            "packages": package_versions(
+                ("transformers", "datasets", "accelerate", "safetensors", "numpy")
+            ),
         },
         "thresholds": {
             "attention_cosine_floor": evaluation["attention_cosine_floor"],
@@ -290,8 +295,12 @@ def main() -> int:
         "cases": cases,
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    atomic_write_text(args.output, json.dumps(payload, indent=2) + "\n")
     print(json.dumps(summary, indent=2))
+    dataset = source_model = target_model = mapper = source_tokenizer = target_tokenizer = None
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
     return 0
 
 

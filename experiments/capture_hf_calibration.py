@@ -16,9 +16,9 @@ import torch
 
 from kvbridge.fit import CalibrationPair
 from kvbridge.huggingface import capture_cache, model_signature, tokenizer_fingerprint
-from kvbridge.io import save_calibration_shard
+from kvbridge.io import atomic_write_text, save_calibration_shard
 from kvbridge.planning import ExperimentConfig, build_scale_plan
-from kvbridge.provenance import code_revision
+from kvbridge.provenance import code_revision, package_versions
 
 
 def _sha256(path: Path) -> str:
@@ -125,6 +125,7 @@ def main() -> int:
         dataset_id, revision=dataset_revision, split=args.split, streaming=True
     )
     captured = 0
+    shard_records: list[dict[str, Any]] = []
     for row_index, row in enumerate(dataset):
         text = row.get(args.text_field)
         if not isinstance(text, str) or not text.strip():
@@ -151,10 +152,17 @@ def main() -> int:
             capture_cache(source_model, source_tokens).detach(),
             capture_cache(target_model, target_tokens).detach(),
         )
-        save_calibration_shard(
-            args.output_dir / f"{captured:05}.safetensors",
-            pair,
-            sequence_id=f"{dataset_id}:{args.split}:{row_index}",
+        sequence_id = f"{dataset_id}:{args.split}:{row_index}"
+        shard_path = save_calibration_shard(
+            args.output_dir / f"{captured:05}.safetensors", pair, sequence_id=sequence_id
+        )
+        shard_records.append(
+            {
+                "name": shard_path.name,
+                "bytes": shard_path.stat().st_size,
+                "sha256": _sha256(shard_path),
+                "sequence_id": sequence_id,
+            }
         )
         captured += 1
         print(f"captured {captured}/{config.calibration_sequences}")
@@ -177,6 +185,7 @@ def main() -> int:
         "source_signature": actual_source.to_dict(),
         "target_signature": actual_target.to_dict(),
         "tokenizer_hash": source_tokenizer_hash,
+        "shards": shard_records,
         "environment": {
             "python": platform.python_version(),
             "torch": torch.__version__,
@@ -184,10 +193,13 @@ def main() -> int:
             "cuda_device": torch.cuda.get_device_name(0) if torch.cuda.is_available() else None,
             "model_dtype": str(dtype).removeprefix("torch."),
             "attention_implementation": args.attn_implementation,
+            "packages": package_versions(
+                ("transformers", "datasets", "accelerate", "safetensors", "numpy")
+            ),
         },
     }
-    (args.output_dir / "capture_manifest.json").write_text(
-        json.dumps(manifest, indent=2) + "\n", encoding="utf-8"
+    atomic_write_text(
+        args.output_dir / "capture_manifest.json", json.dumps(manifest, indent=2) + "\n"
     )
     return 0
 

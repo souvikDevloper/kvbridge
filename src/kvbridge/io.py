@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import os
 from collections.abc import Callable, Iterable
 from pathlib import Path
+from uuid import uuid4
 
 import torch
 from safetensors import safe_open
@@ -12,6 +14,22 @@ from safetensors.torch import save_file
 from kvbridge.cache import KVCache, RotaryFactors
 from kvbridge.errors import ArtifactError
 from kvbridge.fit import CalibrationPair
+
+
+def atomic_write_text(path: str | Path, content: str) -> Path:
+    """Durably replace a text file without exposing a partially written destination."""
+    destination = Path(path)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary = destination.with_name(f".{destination.name}.{uuid4().hex}.tmp")
+    try:
+        with temporary.open("x", encoding="utf-8", newline="\n") as stream:
+            stream.write(content)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, destination)
+    finally:
+        temporary.unlink(missing_ok=True)
+    return destination
 
 
 def _cache_tensors(prefix: str, cache: KVCache) -> dict[str, torch.Tensor]:
@@ -52,7 +70,16 @@ def save_calibration_shard(
             pair.target.rotary.interleaved if pair.target.rotary else False
         ).lower(),
     }
-    save_file(tensors, str(destination), metadata=metadata)
+    temporary = destination.with_name(f".{destination.name}.{uuid4().hex}.tmp")
+    try:
+        save_file(tensors, str(temporary), metadata=metadata)
+        with temporary.open("rb+") as stream:
+            os.fsync(stream.fileno())
+        if destination.exists():
+            raise ArtifactError(f"refusing to overwrite calibration shard: {destination}")
+        os.replace(temporary, destination)
+    finally:
+        temporary.unlink(missing_ok=True)
     return destination
 
 

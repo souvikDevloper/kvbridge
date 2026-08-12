@@ -28,6 +28,19 @@ Free H100/H200 availability is opportunistic rather than guaranteed. Lightning A
 
 The driver is fail-fast and all real-model scripts are dry-run by default outside it. Each executed result records the code commit, config and artifact hashes, pinned model/dataset revisions, CUDA/PyTorch versions, actual GPU name, memory, and unaggregated per-sequence metrics.
 
+The driver also resumes completed stages safely. A capture is reused only when every expected shard exists, its SafeTensors metadata is valid, and its size, sequence identity, and SHA-256 match the capture manifest. Mapper artifacts are checksum-loaded and rebound to the validated capture/config; evaluation summaries are recomputed from raw cases before reuse. Invalid or partial directories are never silently deleted or overwritten.
+
+To validate evidence independently:
+
+```bash
+python experiments/validate_hf_evidence.py configs/qwen3_0.6b_to_1.7b.t2-smoke.json \
+  --calibration-dir data/calibration \
+  --artifact-dir artifacts/qwen3-0.6b-to-1.7b \
+  --result results/qwen3-0.6b-to-1.7b.t2.json
+```
+
+For a larger calibration study on the same free-GPU pair, set the three output paths and use `configs/qwen3_0.6b_to_1.7b.t2-capacity.json`. Keep smoke and capacity evidence in separate directories.
+
 ## Acceptance boundary
 
 The config preregisters an attention-output cosine floor of 0.90 and a p95 one-token logit KL ceiling of 0.20. These are initial smoke gates, not universal production SLOs. A failed gate is a valid research result and must remain visible.

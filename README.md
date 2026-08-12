@@ -127,6 +127,8 @@ The adapter withholds the final prompt token, maps the preceding prefix cache, a
 
 `GuardedTransferEngine` rejects non-finite or unbounded caches, enforces an optional latency budget, invokes an application quality probe, and emits a structured event on both acceptance and fallback. It never silently substitutes a failed bridge.
 
+Shadow probes can be deterministically sampled by request ID, so retries receive the same oracle decision and sampling remains auditable. Batch size and token count are bounded before mapping; the serving layer still owns request-level concurrency and memory limits.
+
 Production rollout should progress through:
 
 1. Offline reconstruction and attention-output diagnostics.
@@ -156,6 +158,8 @@ git clone https://github.com/souvikDevloper/kvbridge.git
 cd kvbridge
 bash scripts/kaggle_t2_smoke.sh
 ```
+
+The driver is stage-resumable by default. It reuses calibration, mapper, or evaluation output only after validating config/model provenance, SafeTensors structure, per-shard SHA-256 records, mapper checksums, and recomputed result aggregates. Set `KVBRIDGE_RESUME=0` for a clean fail-closed run into empty paths.
 
 See the [free-GPU runbook](docs/FREE_GPU_T2.md). The repository does not call this successful until the raw result exists and its preregistered gates pass.
 

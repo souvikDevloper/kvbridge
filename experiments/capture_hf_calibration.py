@@ -14,6 +14,7 @@ from typing import Any
 
 import torch
 
+from kvbridge.evidence import calibration_contract_sha256
 from kvbridge.fit import CalibrationPair
 from kvbridge.huggingface import capture_cache, model_signature, tokenizer_fingerprint
 from kvbridge.io import atomic_write_text, save_calibration_shard
@@ -60,10 +61,10 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("config", type=Path)
     parser.add_argument("--output-dir", type=Path, default=Path("data/calibration"))
-    parser.add_argument("--split", default="train")
+    parser.add_argument("--split")
     parser.add_argument("--text-field", default="text")
     parser.add_argument("--device-map", default="auto")
-    parser.add_argument("--attn-implementation", default="sdpa")
+    parser.add_argument("--attn-implementation")
     parser.add_argument(
         "--model-dtype", choices=("auto", "float16", "bfloat16", "float32"), default=None
     )
@@ -82,6 +83,19 @@ def main() -> int:
     raw_config = json.loads(args.config.read_text(encoding="utf-8"))
     dataset_id = raw_config["calibration"].get("dataset")
     dataset_revision = raw_config["calibration"].get("dataset_revision")
+    configured_split = raw_config["calibration"].get("split", "train")
+    configured_dtype = raw_config.get("model_dtype", "auto")
+    configured_attention = raw_config.get("attention_implementation", "sdpa")
+    if args.split is not None and args.split != configured_split:
+        raise ValueError("--split must match calibration.split so provenance remains valid")
+    if args.model_dtype is not None and args.model_dtype != configured_dtype:
+        raise ValueError("--model-dtype must match model_dtype so provenance remains valid")
+    if args.attn_implementation is not None and args.attn_implementation != configured_attention:
+        raise ValueError(
+            "--attn-implementation must match attention_implementation so provenance remains valid"
+        )
+    split = configured_split
+    attention_implementation = configured_attention
     if not dataset_id:
         raise ValueError("config calibration.dataset is required for real-model capture")
     if not dataset_revision:
@@ -101,12 +115,12 @@ def main() -> int:
     if source_tokenizer_hash != target_tokenizer_hash:
         raise RuntimeError("source and target tokenizer fingerprints differ")
 
-    dtype_name = args.model_dtype or raw_config.get("model_dtype", "auto")
+    dtype_name = configured_dtype
     dtype = _model_dtype(dtype_name)
     load_kwargs = {
         "device_map": args.device_map,
         "torch_dtype": dtype,
-        "attn_implementation": args.attn_implementation,
+        "attn_implementation": attention_implementation,
         "low_cpu_mem_usage": True,
     }
     source_model = AutoModelForCausalLM.from_pretrained(
@@ -122,7 +136,7 @@ def main() -> int:
     actual_source.validate_pair(actual_target, require_matched_kv=config.fit.require_matched_kv)
 
     dataset = load_dataset(
-        dataset_id, revision=dataset_revision, split=args.split, streaming=True
+        dataset_id, revision=dataset_revision, split=split, streaming=True
     )
     captured = 0
     shard_records: list[dict[str, Any]] = []
@@ -152,7 +166,7 @@ def main() -> int:
             capture_cache(source_model, source_tokens).detach(),
             capture_cache(target_model, target_tokens).detach(),
         )
-        sequence_id = f"{dataset_id}:{args.split}:{row_index}"
+        sequence_id = f"{dataset_id}:{split}:{row_index}"
         shard_path = save_calibration_shard(
             args.output_dir / f"{captured:05}.safetensors", pair, sequence_id=sequence_id
         )
@@ -174,10 +188,11 @@ def main() -> int:
         "schema_version": 1,
         "config": str(args.config.resolve()),
         "config_sha256": _sha256(args.config),
+        "calibration_contract_sha256": calibration_contract_sha256(args.config),
         "code_revision": code_revision(),
         "dataset": dataset_id,
         "dataset_revision": dataset_revision,
-        "split": args.split,
+        "split": split,
         "sequences": captured,
         "tokens": config.calibration_tokens,
         "source_fingerprint": actual_source.fingerprint,
@@ -192,14 +207,15 @@ def main() -> int:
             "cuda_runtime": torch.version.cuda,
             "cuda_device": torch.cuda.get_device_name(0) if torch.cuda.is_available() else None,
             "model_dtype": str(dtype).removeprefix("torch."),
-            "attention_implementation": args.attn_implementation,
+            "attention_implementation": attention_implementation,
             "packages": package_versions(
                 ("transformers", "datasets", "accelerate", "safetensors", "numpy")
             ),
         },
     }
     atomic_write_text(
-        args.output_dir / "capture_manifest.json", json.dumps(manifest, indent=2) + "\n"
+        args.output_dir / "capture_manifest.json",
+        json.dumps(manifest, indent=2, allow_nan=False) + "\n",
     )
     return 0
 

@@ -30,8 +30,8 @@ def _validate(values: Sequence[float], confidence: float, resamples: int) -> lis
         raise ValueError("bootstrap input must be finite")
     if not 0.0 < confidence < 1.0:
         raise ValueError("confidence must be between zero and one")
-    if resamples <= 0:
-        raise ValueError("resamples must be positive")
+    if not 1 <= resamples <= 1_000_000:
+        raise ValueError("resamples must be between 1 and 1,000,000")
     return normalized
 
 

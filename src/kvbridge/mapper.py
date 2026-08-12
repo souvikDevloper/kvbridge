@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import math
 import os
 import time
 from collections.abc import Sequence
@@ -128,6 +129,24 @@ class CrossModelKVMapper:
                 )
             ):
                 raise ArtifactError(f"mapper tensors must be floating point at layer {layer}")
+            if not all(
+                bool(torch.isfinite(tensor).all().item())
+                for tensor in (
+                    self.key_weights[layer],
+                    self.value_weights[layer],
+                    self.key_biases[layer],
+                    self.value_biases[layer],
+                )
+            ):
+                raise ArtifactError(f"mapper tensors must be finite at layer {layer}")
+        diagnostics = [
+            value
+            for collection in (self.selection_scores, self.fit_key_r2, self.fit_value_r2)
+            for row in collection
+            for value in (row if isinstance(row, list) else [row])
+        ]
+        if not all(math.isfinite(float(value)) for value in diagnostics):
+            raise ArtifactError("mapper diagnostics must be finite")
 
     @property
     def storage_dtype(self) -> str:
@@ -330,6 +349,7 @@ class CrossModelKVMapper:
                 ),
                 indent=2,
                 sort_keys=True,
+                allow_nan=False,
             )
             + "\n",
             encoding="utf-8",

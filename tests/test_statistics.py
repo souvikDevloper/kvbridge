@@ -27,3 +27,5 @@ def test_bootstrap_rejects_invalid_input() -> None:
         bootstrap_mean_interval([])
     with pytest.raises(ValueError, match="equal lengths"):
         paired_bootstrap_difference([1.0], [1.0, 2.0])
+    with pytest.raises(ValueError, match="1,000,000"):
+        bootstrap_mean_interval([1.0], resamples=1_000_001)

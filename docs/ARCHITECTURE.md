@@ -24,7 +24,7 @@ KVBridge treats a cache transfer as a typed, revision-pinned state conversion. F
 
 Stage 1 fits single-source, same-head probes for every source/target layer pair and averages K/V R² across heads. Stage 2 concatenates every KV head from the selected source layers and solves one multi-output ridge system per target layer for K and V. Reshaping that solution yields independent target-head projections while sharing the expensive covariance computation.
 
-`RidgeAccumulator` stores `count`, `ΣX`, `ΣY`, `XᵀX`, `XᵀY`, and `YᵀY`. Accumulators merge exactly and can all-reduce across an initialized `torch.distributed` group.
+`RidgeAccumulator` stores count, running means, and centered `XᵀX`, `XᵀY`, and `YᵀY` moments. Batchwise Chan updates avoid subtracting large raw moments, while a parallel Chan correction keeps distributed all-reduce fixed-size and mergeable.
 
 ### Artifact plane
 

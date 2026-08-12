@@ -17,10 +17,12 @@ class RidgeSolution:
 
 
 class RidgeAccumulator:
-    """Accumulate X'X/X'Y without retaining calibration tokens.
+    """Accumulate centered covariance statistics without retaining tokens.
 
     Statistics are mergeable, which permits sharded calibration and a final
-    all-reduce in a distributed job. Float64 is the safe default for the solve.
+    all-reduce in a distributed job. Batchwise Chan updates avoid the
+    catastrophic cancellation caused by ``X.T @ X - n * outer(mean, mean)``.
+    Float64 remains the safe default for especially ill-conditioned solves.
     """
 
     def __init__(
@@ -43,11 +45,47 @@ class RidgeAccumulator:
         self.dtype = dtype
         self.device = resolved_device
         self.count = 0
-        self.sum_x = torch.zeros(x_features, dtype=dtype, device=resolved_device)
-        self.sum_y = torch.zeros(y_features, dtype=dtype, device=resolved_device)
-        self.xtx = torch.zeros((x_features, x_features), dtype=dtype, device=resolved_device)
-        self.xty = torch.zeros((x_features, y_features), dtype=dtype, device=resolved_device)
-        self.yty = torch.zeros((), dtype=dtype, device=resolved_device)
+        self.mean_x = torch.zeros(x_features, dtype=dtype, device=resolved_device)
+        self.mean_y = torch.zeros(y_features, dtype=dtype, device=resolved_device)
+        self.centered_xtx = torch.zeros(
+            (x_features, x_features), dtype=dtype, device=resolved_device
+        )
+        self.centered_xty = torch.zeros(
+            (x_features, y_features), dtype=dtype, device=resolved_device
+        )
+        self.centered_yty = torch.zeros((), dtype=dtype, device=resolved_device)
+
+    def _merge_statistics(
+        self,
+        count: int,
+        mean_x: Tensor,
+        mean_y: Tensor,
+        centered_xtx: Tensor,
+        centered_xty: Tensor,
+        centered_yty: Tensor,
+    ) -> None:
+        if count <= 0:
+            return
+        if self.count == 0:
+            self.count = count
+            self.mean_x.copy_(mean_x)
+            self.mean_y.copy_(mean_y)
+            self.centered_xtx.copy_(centered_xtx)
+            self.centered_xty.copy_(centered_xty)
+            self.centered_yty.copy_(centered_yty)
+            return
+
+        previous = self.count
+        total = previous + count
+        delta_x = mean_x - self.mean_x
+        delta_y = mean_y - self.mean_y
+        correction = previous * count / total
+        self.centered_xtx += centered_xtx + correction * torch.outer(delta_x, delta_x)
+        self.centered_xty += centered_xty + correction * torch.outer(delta_x, delta_y)
+        self.centered_yty += centered_yty + correction * torch.sum(delta_y * delta_y)
+        self.mean_x += delta_x * (count / total)
+        self.mean_y += delta_y * (count / total)
+        self.count = total
 
     def update(self, x: Tensor, y: Tensor) -> None:
         if x.ndim != 2 or y.ndim != 2 or x.shape[0] != y.shape[0]:
@@ -56,12 +94,21 @@ class RidgeAccumulator:
             raise ValueError("feature count differs from accumulator configuration")
         x_acc = x.detach().to(device=self.device, dtype=self.dtype)
         y_acc = y.detach().to(device=self.device, dtype=self.dtype)
-        self.count += x_acc.shape[0]
-        self.sum_x += x_acc.sum(dim=0)
-        self.sum_y += y_acc.sum(dim=0)
-        self.xtx += x_acc.T @ x_acc
-        self.xty += x_acc.T @ y_acc
-        self.yty += (y_acc * y_acc).sum()
+        count = x_acc.shape[0]
+        if count == 0:
+            return
+        mean_x = x_acc.mean(dim=0)
+        mean_y = y_acc.mean(dim=0)
+        centered_x = x_acc - mean_x
+        centered_y = y_acc - mean_y
+        self._merge_statistics(
+            count,
+            mean_x,
+            mean_y,
+            centered_x.T @ centered_x,
+            centered_x.T @ centered_y,
+            (centered_y * centered_y).sum(),
+        )
 
     def merge(self, other: RidgeAccumulator) -> RidgeAccumulator:
         if (self.x_features, self.y_features, self.dtype, self.device) != (
@@ -71,52 +118,91 @@ class RidgeAccumulator:
             other.device,
         ):
             raise ValueError("only like-shaped accumulators can be merged")
-        self.count += other.count
-        self.sum_x += other.sum_x
-        self.sum_y += other.sum_y
-        self.xtx += other.xtx
-        self.xty += other.xty
-        self.yty += other.yty
+        if other is self:
+            self._merge_statistics(
+                other.count,
+                other.mean_x.clone(),
+                other.mean_y.clone(),
+                other.centered_xtx.clone(),
+                other.centered_xty.clone(),
+                other.centered_yty.clone(),
+            )
+            return self
+        self._merge_statistics(
+            other.count,
+            other.mean_x,
+            other.mean_y,
+            other.centered_xtx,
+            other.centered_xty,
+            other.centered_yty,
+        )
         return self
 
     def state_dict(self) -> dict[str, Tensor | int]:
         """Return mergeable state suitable for checkpointing or process exchange."""
         return {
+            "schema_version": 2,
             "count": self.count,
-            "sum_x": self.sum_x.clone(),
-            "sum_y": self.sum_y.clone(),
-            "xtx": self.xtx.clone(),
-            "xty": self.xty.clone(),
-            "yty": self.yty.clone(),
+            "mean_x": self.mean_x.clone(),
+            "mean_y": self.mean_y.clone(),
+            "centered_xtx": self.centered_xtx.clone(),
+            "centered_xty": self.centered_xty.clone(),
+            "centered_yty": self.centered_yty.clone(),
         }
 
     def all_reduce_(self) -> RidgeAccumulator:
         """Sum sufficient statistics across an initialized torch.distributed group."""
         if not torch.distributed.is_available() or not torch.distributed.is_initialized():
             raise RuntimeError("torch.distributed must be initialized before all_reduce_")
-        count = torch.tensor(self.count, dtype=torch.int64, device=self.device)
+        local_count = self.count
+        count = torch.tensor(local_count, dtype=torch.int64, device=self.device)
+        weighted_mean_x = self.mean_x * local_count
+        weighted_mean_y = self.mean_y * local_count
         torch.distributed.all_reduce(count)
-        for tensor in (self.sum_x, self.sum_y, self.xtx, self.xty, self.yty):
+        torch.distributed.all_reduce(weighted_mean_x)
+        torch.distributed.all_reduce(weighted_mean_y)
+        global_count = int(count.item())
+        if global_count == 0:
+            return self
+        global_mean_x = weighted_mean_x / global_count
+        global_mean_y = weighted_mean_y / global_count
+
+        # Parallel Chan merge: correct each rank's centered moments to the
+        # global mean, then sum fixed-size tensors. This avoids all-gathering
+        # an O(features^2) covariance matrix from every rank.
+        delta_x = self.mean_x - global_mean_x
+        delta_y = self.mean_y - global_mean_y
+        global_xtx = self.centered_xtx + local_count * torch.outer(delta_x, delta_x)
+        global_xty = self.centered_xty + local_count * torch.outer(delta_x, delta_y)
+        global_yty = self.centered_yty + local_count * torch.sum(delta_y * delta_y)
+        for tensor in (global_xtx, global_xty, global_yty):
             torch.distributed.all_reduce(tensor)
-        self.count = int(count.item())
+        self.count = global_count
+        self.mean_x.copy_(global_mean_x)
+        self.mean_y.copy_(global_mean_y)
+        self.centered_xtx.copy_(global_xtx)
+        self.centered_xty.copy_(global_xty)
+        self.centered_yty.copy_(global_yty)
         return self
 
     def solve(self, alpha: float) -> RidgeSolution:
         if self.count < 2:
             raise ValueError("at least two observations are required")
-        mean_x, mean_y = self.sum_x / self.count, self.sum_y / self.count
-        centered_xtx = self.xtx - self.count * torch.outer(mean_x, mean_x)
-        centered_xty = self.xty - self.count * torch.outer(mean_x, mean_y)
+        if alpha < 0:
+            raise ValueError("ridge penalty cannot be negative")
+        centered_xtx = (self.centered_xtx + self.centered_xtx.T) * 0.5
+        centered_xty = self.centered_xty
         system = centered_xtx + alpha * torch.eye(
             self.x_features, dtype=self.dtype, device=self.device
         )
-        try:
-            weight = torch.linalg.solve(system, centered_xty)
-        except torch.linalg.LinAlgError:  # type: ignore[attr-defined]
+        factor, info = torch.linalg.cholesky_ex(system)
+        if int(info.max().item()) == 0:
+            weight = torch.cholesky_solve(centered_xty, factor)
+        else:
             weight = torch.linalg.lstsq(system, centered_xty).solution
-        bias = mean_y - mean_x @ weight
+        bias = self.mean_y - self.mean_x @ weight
 
-        centered_yty = self.yty - self.count * (mean_y * mean_y).sum()
+        centered_yty = self.centered_yty
         residual = (
             centered_yty
             - 2 * torch.sum(weight * centered_xty)

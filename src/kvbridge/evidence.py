@@ -6,8 +6,9 @@ import hashlib
 import hmac
 import json
 import math
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, NoReturn
 
 from safetensors import SafetensorError, safe_open
 
@@ -26,10 +27,139 @@ def sha256_file(path: str | Path) -> str:
     return digest.hexdigest()
 
 
+def calibration_contract_sha256(config_path: str | Path) -> str:
+    """Hash only inputs that determine captured cache tensors.
+
+    Fit, stride, storage, and evaluation knobs are deliberately excluded so an
+    immutable capture can be reused for controlled ablations without weakening
+    model/dataset provenance.
+    """
+    payload = _load_json(Path(config_path), "experiment config")
+    calibration = payload.get("calibration")
+    if not isinstance(calibration, dict):
+        raise ArtifactError("experiment config has no calibration object")
+    contract = {
+        "source": payload.get("source"),
+        "target": payload.get("target"),
+        "calibration": {
+            "dataset": calibration.get("dataset"),
+            "dataset_revision": calibration.get("dataset_revision"),
+            "split": calibration.get("split", "train"),
+            "sequences": calibration.get("sequences"),
+            "tokens": calibration.get("tokens"),
+        },
+        "model_dtype": payload.get("model_dtype", "auto"),
+        "attention_implementation": payload.get("attention_implementation", "sdpa"),
+    }
+    canonical = json.dumps(contract, sort_keys=True, separators=(",", ":"), allow_nan=False)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def index_legacy_capture_evidence(
+    config_path: str | Path,
+    calibration_dir: str | Path,
+    *,
+    index_code_revision: str,
+) -> dict[str, Any]:
+    """Add a recoverable integrity index to a legacy, exact-config capture.
+
+    The original manifest is retained byte-for-byte. This migration refuses
+    cross-config input; ablation reuse is enabled only after every shard has
+    been inspected and hashed under the requested legacy config.
+    """
+    from kvbridge.io import atomic_write_text
+
+    if not index_code_revision:
+        raise ArtifactError("integrity-index code revision is required")
+    config_file = Path(config_path)
+    root = Path(calibration_dir)
+    manifest_path = root / "capture_manifest.json"
+    original_text = manifest_path.read_text(encoding="utf-8")
+    manifest = _load_json(manifest_path, "capture manifest")
+    if manifest.get("calibration_contract_sha256") is not None:
+        return validate_capture_evidence(config_file, root)
+    _require(
+        _same_digest(manifest.get("config_sha256"), sha256_file(config_file)),
+        "legacy capture must match the exact config before integrity indexing",
+    )
+    config = ExperimentConfig.load(config_file)
+    _require(
+        manifest.get("sequences") == config.calibration_sequences,
+        "legacy capture sequence count differs from the config",
+    )
+    _require(
+        manifest.get("tokens") == config.calibration_tokens,
+        "legacy capture token count differs from the config",
+    )
+    paths = sorted(root.glob("*.safetensors"))
+    expected_names = [f"{index:05}.safetensors" for index in range(config.calibration_sequences)]
+    _require(
+        [path.name for path in paths] == expected_names,
+        "legacy calibration shard set is incomplete or unexpectedly named",
+    )
+    records: list[dict[str, Any]] = []
+    for path in paths:
+        try:
+            with safe_open(path, framework="pt", device="cpu") as stream:  # type: ignore[no-untyped-call]
+                metadata = stream.metadata() or {}
+                names = set(stream.keys())
+        except (OSError, SafetensorError) as error:
+            raise ArtifactError(f"could not inspect calibration shard: {path.name}") from error
+        _require(
+            metadata.get("format") == "kvbridge-calibration"
+            and metadata.get("schema") == "1",
+            f"unsupported calibration shard metadata: {path.name}",
+        )
+        _require(
+            {"source.keys", "source.values", "target.keys", "target.values"}.issubset(names),
+            f"calibration shard is missing required tensors: {path.name}",
+        )
+        sequence_id = metadata.get("sequence_id")
+        _require(bool(sequence_id), f"calibration shard has no sequence id: {path.name}")
+        records.append(
+            {
+                "name": path.name,
+                "bytes": path.stat().st_size,
+                "sha256": sha256_file(path),
+                "sequence_id": sequence_id,
+            }
+        )
+
+    original_sha256 = hashlib.sha256(original_text.encode("utf-8")).hexdigest()
+    backup_path = root / f"capture_manifest.legacy-{original_sha256[:12]}.json"
+    if backup_path.exists():
+        _require(
+            backup_path.read_text(encoding="utf-8") == original_text,
+            "legacy manifest backup path already contains different content",
+        )
+    else:
+        atomic_write_text(backup_path, original_text)
+    upgraded = dict(manifest)
+    upgraded.update(
+        {
+            "calibration_contract_sha256": calibration_contract_sha256(config_file),
+            "shards": records,
+            "integrity_source_manifest_sha256": original_sha256,
+            "integrity_index_code_revision": index_code_revision,
+            "integrity_indexed_at": datetime.now(timezone.utc).isoformat(),
+        }
+    )
+    atomic_write_text(
+        manifest_path, json.dumps(upgraded, indent=2, sort_keys=True, allow_nan=False) + "\n"
+    )
+    return validate_capture_evidence(config_file, root)
+
+
+def _reject_json_constant(value: str) -> NoReturn:
+    raise ValueError(f"non-standard JSON numeric constant: {value}")
+
+
 def _load_json(path: Path, label: str) -> dict[str, Any]:
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as error:
+        payload = json.loads(
+            path.read_text(encoding="utf-8"), parse_constant=_reject_json_constant
+        )
+    except (OSError, json.JSONDecodeError, ValueError) as error:
         raise ArtifactError(f"could not read {label}: {path}") from error
     if not isinstance(payload, dict):
         raise ArtifactError(f"{label} must contain a JSON object")
@@ -58,10 +188,18 @@ def validate_capture_evidence(
     manifest_path = root / "capture_manifest.json"
     manifest = _load_json(manifest_path, "capture manifest")
     _require(manifest.get("schema_version") == 1, "unsupported capture manifest schema")
-    _require(
-        _same_digest(manifest.get("config_sha256"), sha256_file(config_file)),
-        "capture manifest config hash differs from the requested config",
-    )
+    contract_digest = calibration_contract_sha256(config_file)
+    recorded_contract = manifest.get("calibration_contract_sha256")
+    if recorded_contract is None:
+        _require(
+            _same_digest(manifest.get("config_sha256"), sha256_file(config_file)),
+            "legacy capture manifest config hash differs from the requested config",
+        )
+    else:
+        _require(
+            _same_digest(recorded_contract, contract_digest),
+            "capture manifest calibration contract differs from the requested config",
+        )
     _require(
         manifest.get("sequences") == config.calibration_sequences,
         "capture manifest sequence count differs from the config",
@@ -135,6 +273,7 @@ def validate_capture_evidence(
     return {
         "stage": "capture",
         "config_sha256": sha256_file(config_file),
+        "calibration_contract_sha256": contract_digest,
         "manifest_sha256": sha256_file(manifest_path),
         "code_revision": manifest["code_revision"],
         "shards": len(shard_paths),
@@ -166,8 +305,12 @@ def validate_mapper_evidence(
         "fit run capture hash differs from the validated capture",
     )
     _require(
-        fit_run.get("code_revision") == capture["code_revision"],
-        "fit run code revision differs from the validated capture",
+        fit_run.get("capture_code_revision") == capture["code_revision"],
+        "fit run does not identify the validated capture code revision",
+    )
+    _require(
+        isinstance(fit_run.get("code_revision"), str) and bool(fit_run["code_revision"]),
+        "fit run has no code revision",
     )
     _require(mapper.config == config.fit, "mapper fit configuration differs from the config")
     _require(
@@ -184,7 +327,8 @@ def validate_mapper_evidence(
         "stage": "fit",
         "config_sha256": sha256_file(config_file),
         "capture_manifest_sha256": capture["manifest_sha256"],
-        "code_revision": capture["code_revision"],
+        "capture_code_revision": capture["code_revision"],
+        "code_revision": fit_run["code_revision"],
         "artifact_manifest_sha256": sha256_file(artifact_root / "manifest.json"),
         "fit_run_sha256": sha256_file(fit_run_path),
     }
@@ -196,9 +340,24 @@ def _percentile(values: list[float], fraction: float) -> float:
 
 
 def _close(actual: Any, expected: float) -> bool:
-    return isinstance(actual, int | float) and math.isclose(
-        float(actual), expected, rel_tol=1e-9, abs_tol=1e-12
+    return (
+        isinstance(actual, int | float)
+        and not isinstance(actual, bool)
+        and math.isfinite(float(actual))
+        and math.isfinite(expected)
+        and math.isclose(float(actual), expected, rel_tol=1e-9, abs_tol=1e-12)
     )
+
+
+def _case_metric(case: dict[str, Any], name: str, index: int) -> float:
+    value = case.get(name)
+    if (
+        not isinstance(value, int | float)
+        or isinstance(value, bool)
+        or not math.isfinite(float(value))
+    ):
+        raise ArtifactError(f"evaluation case {index} has non-finite metric: {name}")
+    return float(value)
 
 
 def validate_result_evidence(
@@ -239,19 +398,57 @@ def validate_result_evidence(
     _require(len(cases) == desired, "evaluation case count differs from the config")
     _require(summary.get("sequences") == desired, "summary sequence count is inconsistent")
 
-    cache_r2 = [float(case["cache_r2"]) for case in cases]
-    attention = [float(case["attention_cosine_mean"]) for case in cases]
-    attention_min = [float(case["attention_cosine_min"]) for case in cases]
-    kl = [float(case["logit_kl"]) for case in cases]
-    transfer = [float(case["transfer_ms"]) for case in cases]
-    target_prefill = [float(case["target_prefix_prefill_ms"]) for case in cases]
+    if not all(isinstance(case, dict) for case in cases):
+        raise ArtifactError("evaluation cases must contain JSON objects")
+    typed_cases = [case for case in cases if isinstance(case, dict)]
+    cache_r2 = [_case_metric(case, "cache_r2", index) for index, case in enumerate(typed_cases)]
+    attention = [
+        _case_metric(case, "attention_cosine_mean", index)
+        for index, case in enumerate(typed_cases)
+    ]
+    attention_min = [
+        _case_metric(case, "attention_cosine_min", index)
+        for index, case in enumerate(typed_cases)
+    ]
+    kl = [_case_metric(case, "logit_kl", index) for index, case in enumerate(typed_cases)]
+    transfer = [
+        _case_metric(case, "transfer_ms", index) for index, case in enumerate(typed_cases)
+    ]
+    target_prefill = [
+        _case_metric(case, "target_prefix_prefill_ms", index)
+        for index, case in enumerate(typed_cases)
+    ]
+    _require(all(value > 0 for value in transfer), "transfer latency must be positive")
+    _require(
+        all(value > 0 for value in target_prefill), "target-prefill latency must be positive"
+    )
+    for index, case in enumerate(typed_cases):
+        _require(
+            isinstance(case.get("next_token_agreement"), bool),
+            f"evaluation case {index} has invalid next-token agreement",
+        )
+        per_layer = case.get("attention_cosine_per_layer")
+        if per_layer is not None:
+            _require(
+                isinstance(per_layer, list)
+                and bool(per_layer)
+                and all(
+                    isinstance(value, int | float)
+                    and not isinstance(value, bool)
+                    and math.isfinite(float(value))
+                    for value in per_layer
+                ),
+                f"evaluation case {index} has invalid per-layer attention metrics",
+            )
     expected = {
         "cache_r2_mean": sum(cache_r2) / desired,
         "attention_cosine_mean": sum(attention) / desired,
         "attention_cosine_min": min(attention_min),
         "logit_kl_mean": sum(kl) / desired,
         "logit_kl_p95": _percentile(kl, 0.95),
-        "next_token_agreement": sum(bool(case["next_token_agreement"]) for case in cases)
+        "next_token_agreement": sum(
+            bool(case["next_token_agreement"]) for case in typed_cases
+        )
         / desired,
         "transfer_ms_median": _percentile(transfer, 0.50),
         "transfer_ms_p95": _percentile(transfer, 0.95),
@@ -273,7 +470,7 @@ def validate_result_evidence(
             "attention_cosine_mean": attention,
             "logit_kl_mean": kl,
             "next_token_agreement": [
-                float(bool(case["next_token_agreement"])) for case in cases
+                float(bool(case["next_token_agreement"])) for case in typed_cases
             ],
         }
         for name, values in interval_inputs.items():

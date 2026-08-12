@@ -95,6 +95,7 @@ def main() -> int:
         "schema_version": 1,
         "evidence_tier": raw_config.get("evidence_tier", "T2"),
         "code_revision": code_revision(),
+        "capture_code_revision": capture_report["code_revision"],
         "config_sha256": _sha256(args.config),
         "capture_manifest_sha256": capture_report["manifest_sha256"],
         "calibration_shards": len(shard_paths),
@@ -119,7 +120,7 @@ def main() -> int:
     }
     atomic_write_text(
         args.output_dir / "fit_run.json",
-        json.dumps(fit_run, indent=2, sort_keys=True) + "\n",
+        json.dumps(fit_run, indent=2, sort_keys=True, allow_nan=False) + "\n",
     )
     print(json.dumps(fit_run, indent=2))
     return 0

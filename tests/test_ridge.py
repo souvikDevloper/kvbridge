@@ -33,6 +33,24 @@ def test_ridge_rejects_empty_solve() -> None:
         raise AssertionError("empty accumulator unexpectedly solved")
 
 
+def test_float32_centering_is_stable_with_large_feature_offsets() -> None:
+    generator = torch.Generator().manual_seed(7)
+    centered = torch.randn(2048, 4, generator=generator)
+    x = centered + 10_000.0
+    expected_weight = torch.tensor([[0.5, -0.2], [0.3, 0.7], [-0.4, 0.1], [0.8, -0.6]])
+    expected_bias = torch.tensor([1.25, -2.5])
+    y = centered @ expected_weight + expected_bias
+    accumulator = RidgeAccumulator(4, 2, dtype=torch.float32)
+
+    for shard in x.split(64):
+        start = accumulator.count
+        accumulator.update(shard, y[start : start + len(shard)])
+    solution = accumulator.solve(alpha=0.01)
+
+    torch.testing.assert_close(solution.weight, expected_weight, atol=2e-3, rtol=2e-3)
+    assert solution.r2 > 0.999
+
+
 def test_ridge_rejects_unavailable_cuda() -> None:
     if torch.cuda.is_available():
         pytest.skip("CUDA is available on this test host")

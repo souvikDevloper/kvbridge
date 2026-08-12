@@ -12,6 +12,9 @@
 - Added fail-closed stage resume and validated recovery from post-write evaluator teardown failures.
 - Added deterministic request-ID shadow sampling plus pre-map batch/token resource gates.
 - Added deterministic bootstrap intervals and paired-difference uncertainty helpers.
+- Added numerically stable centered ridge statistics and calibration-contract reuse for fit ablations.
+- Rejected non-finite tensors, metrics, and non-standard JSON numeric constants fail closed.
+- Added recoverable integrity indexing for exact-config legacy calibration captures.
 - Pinned the tested Transformers major version and aligned the runtime package version with v0.2.0.
 - Modernized GitHub Actions to Node 24-based checkout/setup actions.
 

@@ -9,6 +9,7 @@ import argparse
 import gc
 import hashlib
 import json
+import math
 import platform
 import time
 from pathlib import Path
@@ -113,7 +114,7 @@ def main() -> int:
     parser.add_argument("config", type=Path)
     parser.add_argument("--artifact-dir", type=Path, default=Path("artifacts/hf-mapper"))
     parser.add_argument("--output", type=Path, default=Path("results/t2_hf_evaluation.json"))
-    parser.add_argument("--attn-implementation", default="sdpa")
+    parser.add_argument("--attn-implementation")
     parser.add_argument("--device-map", default="auto")
     parser.add_argument("--execute", action="store_true")
     args = parser.parse_args()
@@ -134,6 +135,12 @@ def main() -> int:
     raw = json.loads(args.config.read_text(encoding="utf-8"))
     calibration = raw["calibration"]
     evaluation = raw["evaluation"]
+    configured_attention = raw.get("attention_implementation", "sdpa")
+    if args.attn_implementation is not None and args.attn_implementation != configured_attention:
+        raise ValueError(
+            "--attn-implementation must match attention_implementation so provenance remains valid"
+        )
+    attention_implementation = configured_attention
     dtype = _model_dtype(raw.get("model_dtype", "float16"))
     mapper = CrossModelKVMapper.load(args.artifact_dir)
     source_tokenizer = AutoTokenizer.from_pretrained(
@@ -147,7 +154,7 @@ def main() -> int:
     load_kwargs = {
         "device_map": args.device_map,
         "torch_dtype": dtype,
-        "attn_implementation": args.attn_implementation,
+        "attn_implementation": attention_implementation,
         "low_cpu_mem_usage": True,
     }
     source_model = AutoModelForCausalLM.from_pretrained(
@@ -218,6 +225,14 @@ def main() -> int:
                 current_cache, target_rotary=current_rotary
             )
         )
+        if not all(
+            bool(torch.isfinite(tensor).all().item())
+            for tensor in (*mapped.keys, *mapped.values)
+        ):
+            raise RuntimeError(
+                f"mapped cache became non-finite at evaluation row {row_index}; "
+                "the artifact is not safe to serve"
+            )
         attention = attention_output_cosine(
             reference.queries, mapped, reference.cache, causal=True
         )
@@ -234,8 +249,7 @@ def main() -> int:
             )
         )
         kl = logit_kl_divergence(candidate_logits, reference_full)
-        cases.append(
-            {
+        case = {
                 "sequence_id": f"{calibration['dataset']}:{row_index}",
                 "input_sha256": hashlib.sha256(source_ids.numpy().tobytes()).hexdigest(),
                 "tokens": int(source_ids.shape[1]),
@@ -255,8 +269,21 @@ def main() -> int:
                 "suffix_decode_ms": suffix_decode_ms,
                 "target_prefix_prefill_ms": target_prefix_prefill_ms,
                 "target_full_prefill_ms": target_full_prefill_ms,
-            }
+        }
+        metric_names = (
+            "cache_r2",
+            "attention_cosine_mean",
+            "attention_cosine_min",
+            "logit_kl",
+            "source_prefill_ms",
+            "transfer_ms",
+            "suffix_decode_ms",
+            "target_prefix_prefill_ms",
+            "target_full_prefill_ms",
         )
+        if not all(math.isfinite(float(case[name])) for name in metric_names):
+            raise RuntimeError(f"non-finite metric at evaluation row {row_index}")
+        cases.append(case)
         print(f"evaluated {len(cases)}/{desired}: attention={attention.mean:.6f}, KL={kl:.6f}")
         if len(cases) >= desired:
             break
@@ -292,7 +319,7 @@ def main() -> int:
             "cuda_total_memory_bytes": torch.cuda.get_device_properties(0).total_memory,
             "cuda_peak_memory_bytes": torch.cuda.max_memory_allocated(),
             "model_dtype": str(dtype).removeprefix("torch."),
-            "attention_implementation": args.attn_implementation,
+            "attention_implementation": attention_implementation,
             "packages": package_versions(
                 ("transformers", "datasets", "accelerate", "safetensors", "numpy")
             ),
@@ -305,8 +332,8 @@ def main() -> int:
         "cases": cases,
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    atomic_write_text(args.output, json.dumps(payload, indent=2) + "\n")
-    print(json.dumps(summary, indent=2))
+    atomic_write_text(args.output, json.dumps(payload, indent=2, allow_nan=False) + "\n")
+    print(json.dumps(summary, indent=2, allow_nan=False))
     dataset = source_model = target_model = mapper = source_tokenizer = target_tokenizer = None
     gc.collect()
     if torch.cuda.is_available():

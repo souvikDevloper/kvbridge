@@ -6,6 +6,8 @@ import torch
 
 from kvbridge.errors import ArtifactError
 from kvbridge.evidence import (
+    calibration_contract_sha256,
+    index_legacy_capture_evidence,
     sha256_file,
     validate_capture_evidence,
     validate_mapper_evidence,
@@ -103,8 +105,9 @@ def _capture_evidence(tmp_path: Path) -> tuple[Path, Path]:
         )
     manifest = {
         "schema_version": 1,
-        "code_revision": "test-revision",
+        "code_revision": "capture-revision",
         "config_sha256": sha256_file(config_path),
+        "calibration_contract_sha256": calibration_contract_sha256(config_path),
         "sequences": 2,
         "tokens": 8,
         "shards": records,
@@ -135,6 +138,52 @@ def test_capture_evidence_rejects_tampered_shard(tmp_path: Path) -> None:
         validate_capture_evidence(config_path, calibration_dir)
 
 
+def test_capture_evidence_is_reusable_across_fit_ablations(tmp_path: Path) -> None:
+    config_path, calibration_dir = _capture_evidence(tmp_path)
+    ablation_path = tmp_path / "ablation.json"
+    ablation = json.loads(config_path.read_text(encoding="utf-8"))
+    ablation["name"] = "synthetic-ridge-ablation"
+    ablation["fit"]["ridge_alpha"] = 1.0
+    ablation["evaluation"]["logit_kl_ceiling"] = 0.5
+    ablation_path.write_text(json.dumps(ablation), encoding="utf-8")
+
+    report = validate_capture_evidence(ablation_path, calibration_dir)
+
+    assert report["calibration_contract_sha256"] == calibration_contract_sha256(
+        config_path
+    )
+
+
+def test_capture_evidence_rejects_changed_calibration_contract(tmp_path: Path) -> None:
+    config_path, calibration_dir = _capture_evidence(tmp_path)
+    incompatible_path = tmp_path / "incompatible.json"
+    incompatible = json.loads(config_path.read_text(encoding="utf-8"))
+    incompatible["calibration"]["tokens"] = 16
+    incompatible_path.write_text(json.dumps(incompatible), encoding="utf-8")
+
+    with pytest.raises(ArtifactError, match="calibration contract differs"):
+        validate_capture_evidence(incompatible_path, calibration_dir)
+
+
+def test_legacy_capture_integrity_index_is_recoverable(tmp_path: Path) -> None:
+    config_path, calibration_dir = _capture_evidence(tmp_path)
+    manifest_path = calibration_dir / "capture_manifest.json"
+    legacy = json.loads(manifest_path.read_text(encoding="utf-8"))
+    legacy.pop("calibration_contract_sha256")
+    legacy.pop("shards")
+    original = json.dumps(legacy) + "\n"
+    atomic_write_text(manifest_path, original)
+
+    report = index_legacy_capture_evidence(
+        config_path, calibration_dir, index_code_revision="index-revision"
+    )
+
+    assert report["shard_hashes_verified"] is True
+    backups = list(calibration_dir.glob("capture_manifest.legacy-*.json"))
+    assert len(backups) == 1
+    assert backups[0].read_text(encoding="utf-8") == original
+
+
 def _complete_evidence(tmp_path: Path) -> tuple[Path, Path, Path, Path]:
     config_path, calibration_dir = _capture_evidence(tmp_path)
     problem = make_problem(calibration_pairs=2, tokens=8)
@@ -142,7 +191,8 @@ def _complete_evidence(tmp_path: Path) -> tuple[Path, Path, Path, Path]:
     capture_manifest = calibration_dir / "capture_manifest.json"
     fit_run = {
         "schema_version": 1,
-        "code_revision": "test-revision",
+        "code_revision": "fit-revision",
+        "capture_code_revision": "capture-revision",
         "config_sha256": sha256_file(config_path),
         "capture_manifest_sha256": sha256_file(capture_manifest),
     }
@@ -185,7 +235,7 @@ def _complete_evidence(tmp_path: Path) -> tuple[Path, Path, Path, Path]:
     result_path = tmp_path / "result.json"
     result = {
         "schema_version": 1,
-        "code_revision": "test-revision",
+        "code_revision": "fit-revision",
         "config_sha256": sha256_file(config_path),
         "artifact_manifest_sha256": sha256_file(artifact_dir / "manifest.json"),
         "summary": summary,
@@ -225,4 +275,15 @@ def test_result_evidence_recomputes_confidence_interval(tmp_path: Path) -> None:
     atomic_write_text(result_path, json.dumps(payload) + "\n")
 
     with pytest.raises(ArtifactError, match="confidence interval is inconsistent"):
+        validate_result_evidence(config_path, calibration_dir, artifact_dir, result_path)
+
+
+def test_result_evidence_rejects_nonstandard_numeric_constants(tmp_path: Path) -> None:
+    config_path, calibration_dir, artifact_dir, result_path = _complete_evidence(tmp_path)
+    payload = result_path.read_text(encoding="utf-8").replace(
+        '"logit_kl": 0.1', '"logit_kl": NaN', 1
+    )
+    atomic_write_text(result_path, payload)
+
+    with pytest.raises(ArtifactError, match="could not read evaluation result"):
         validate_result_evidence(config_path, calibration_dir, artifact_dir, result_path)

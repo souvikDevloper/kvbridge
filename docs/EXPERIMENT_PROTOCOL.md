@@ -67,6 +67,7 @@ Primary quality endpoints are downstream retention and attention-output cosine. 
 - Publish the bootstrap confidence level, resample count, and seed; KVBridge records all three.
 - Report median, p95, and p99 latency with trial counts and warmup policy.
 - Keep raw JSON/CSV outputs and immutable manifests alongside tables.
+- Reuse calibration shards across fit ablations only when their calibration-contract hash matches; record capture and fit code revisions separately.
 - Distinguish exploratory ablations from preregistered confirmatory runs.
 
 ## Ship gate

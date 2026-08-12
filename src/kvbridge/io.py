@@ -62,7 +62,7 @@ def _bool(value: str | None) -> bool:
 
 def load_calibration_shard(path: str | Path) -> CalibrationPair:
     source_path = Path(path)
-    with safe_open(  # type: ignore[no-untyped-call]
+    with safe_open(  # type: ignore[no-untyped-call, unused-ignore]
         source_path, framework="pt", device="cpu"
     ) as stream:
         metadata = stream.metadata() or {}

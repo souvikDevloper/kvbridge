@@ -16,13 +16,13 @@ from kvbridge.errors import ArtifactError
 from kvbridge.fit import CalibrationPair
 
 
-def atomic_write_text(path: str | Path, content: str) -> Path:
-    """Durably replace a text file without exposing a partially written destination."""
+def atomic_write_bytes(path: str | Path, content: bytes) -> Path:
+    """Durably replace a file without exposing a partially written destination."""
     destination = Path(path)
     destination.parent.mkdir(parents=True, exist_ok=True)
     temporary = destination.with_name(f".{destination.name}.{uuid4().hex}.tmp")
     try:
-        with temporary.open("x", encoding="utf-8", newline="\n") as stream:
+        with temporary.open("xb") as stream:
             stream.write(content)
             stream.flush()
             os.fsync(stream.fileno())
@@ -30,6 +30,11 @@ def atomic_write_text(path: str | Path, content: str) -> Path:
     finally:
         temporary.unlink(missing_ok=True)
     return destination
+
+
+def atomic_write_text(path: str | Path, content: str) -> Path:
+    """Durably replace UTF-8 text with canonical LF bytes."""
+    return atomic_write_bytes(path, content.replace("\r\n", "\n").encode("utf-8"))
 
 
 def _cache_tensors(prefix: str, cache: KVCache) -> dict[str, torch.Tensor]:

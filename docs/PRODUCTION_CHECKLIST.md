@@ -17,6 +17,8 @@
 - [ ] Verify held-out benchmark selection discipline.
 - [ ] Load the artifact from a clean process and verify its checksum.
 - [ ] Archive raw configs/results with code and container digests.
+- [ ] Reject non-finite tensors and non-standard JSON values before publication.
+- [ ] Independently recompute fit summaries, result aggregates, and confidence intervals from stored evidence.
 - [ ] Verify artifact storage dtype/byte count and decompress once at process startup.
 - [ ] Record attention-output cosine and short-suffix logit KL on held-out prompts.
 - [ ] Exercise corruption, incompatibility, timeout, and quality-gate fallbacks.

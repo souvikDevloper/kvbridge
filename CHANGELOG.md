@@ -15,6 +15,7 @@
 - Added numerically stable centered ridge statistics and calibration-contract reuse for fit ablations.
 - Rejected non-finite tensors, metrics, and non-standard JSON numeric constants fail closed.
 - Added recoverable integrity indexing for exact-config legacy calibration captures.
+- Preserved legacy manifest backups byte-for-byte and widened NumPy 2 compatibility.
 - Pinned the tested Transformers major version and aligned the runtime package version with v0.2.0.
 - Modernized GitHub Actions to Node 24-based checkout/setup actions.
 

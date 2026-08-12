@@ -14,7 +14,7 @@ from safetensors import SafetensorError, safe_open
 
 from kvbridge.errors import ArtifactError
 from kvbridge.mapper import CrossModelKVMapper
-from kvbridge.planning import ExperimentConfig
+from kvbridge.planning import ExperimentConfig, build_scale_plan
 from kvbridge.statistics import bootstrap_mean_interval
 
 
@@ -67,14 +67,18 @@ def index_legacy_capture_evidence(
     cross-config input; ablation reuse is enabled only after every shard has
     been inspected and hashed under the requested legacy config.
     """
-    from kvbridge.io import atomic_write_text
+    from kvbridge.io import atomic_write_bytes, atomic_write_text
 
     if not index_code_revision:
         raise ArtifactError("integrity-index code revision is required")
     config_file = Path(config_path)
     root = Path(calibration_dir)
     manifest_path = root / "capture_manifest.json"
-    original_text = manifest_path.read_text(encoding="utf-8")
+    original_bytes = manifest_path.read_bytes()
+    try:
+        original_bytes.decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise ArtifactError("legacy capture manifest is not valid UTF-8") from error
     manifest = _load_json(manifest_path, "capture manifest")
     if manifest.get("calibration_contract_sha256") is not None:
         return validate_capture_evidence(config_file, root)
@@ -125,15 +129,15 @@ def index_legacy_capture_evidence(
             }
         )
 
-    original_sha256 = hashlib.sha256(original_text.encode("utf-8")).hexdigest()
+    original_sha256 = hashlib.sha256(original_bytes).hexdigest()
     backup_path = root / f"capture_manifest.legacy-{original_sha256[:12]}.json"
     if backup_path.exists():
         _require(
-            backup_path.read_text(encoding="utf-8") == original_text,
+            backup_path.read_bytes() == original_bytes,
             "legacy manifest backup path already contains different content",
         )
     else:
-        atomic_write_text(backup_path, original_text)
+        atomic_write_bytes(backup_path, original_bytes)
     upgraded = dict(manifest)
     upgraded.update(
         {
@@ -173,6 +177,22 @@ def _require(condition: bool, message: str) -> None:
 
 def _same_digest(actual: Any, expected: str) -> bool:
     return isinstance(actual, str) and hmac.compare_digest(actual, expected)
+
+
+def _finite_number(value: Any) -> bool:
+    return (
+        isinstance(value, int | float)
+        and not isinstance(value, bool)
+        and math.isfinite(float(value))
+    )
+
+
+def _close(actual: Any, expected: float) -> bool:
+    return (
+        _finite_number(actual)
+        and math.isfinite(expected)
+        and math.isclose(float(actual), expected, rel_tol=1e-9, abs_tol=1e-12)
+    )
 
 
 def validate_capture_evidence(
@@ -323,6 +343,50 @@ def validate_mapper_evidence(
         and mapper.target_signature.revision == config.target.revision,
         "mapper target identity differs from the config",
     )
+    calibration_paths = sorted(calibration_root.glob("*.safetensors"))
+    calibration_bytes = sum(path.stat().st_size for path in calibration_paths)
+    plan = build_scale_plan(config)
+    _require(
+        fit_run.get("calibration_shards") == config.calibration_sequences,
+        "fit run calibration shard count is inconsistent",
+    )
+    _require(
+        fit_run.get("calibration_bytes") == calibration_bytes,
+        "fit run calibration byte count is inconsistent",
+    )
+    _require(
+        fit_run.get("calibration_data_passes") == plan.calibration_data_passes,
+        "fit run calibration pass count is inconsistent",
+    )
+    _require(
+        fit_run.get("estimated_calibration_bytes_read")
+        == calibration_bytes * plan.calibration_data_passes,
+        "fit run estimated calibration I/O is inconsistent",
+    )
+    _require(
+        fit_run.get("artifact_storage_dtype") == mapper.storage_dtype,
+        "fit run artifact dtype is inconsistent",
+    )
+    elapsed_seconds = fit_run.get("elapsed_seconds")
+    elapsed_value = (
+        float(elapsed_seconds)
+        if isinstance(elapsed_seconds, int | float) and not isinstance(elapsed_seconds, bool)
+        else math.nan
+    )
+    _require(
+        math.isfinite(elapsed_value) and elapsed_value > 0,
+        "fit run elapsed time must be finite and positive",
+    )
+    expected_key_r2 = sum(mapper.fit_key_r2) / len(mapper.fit_key_r2)
+    expected_value_r2 = sum(mapper.fit_value_r2) / len(mapper.fit_value_r2)
+    _require(
+        _close(fit_run.get("fit_key_r2_mean"), expected_key_r2),
+        "fit run key R2 is inconsistent with the artifact",
+    )
+    _require(
+        _close(fit_run.get("fit_value_r2_mean"), expected_value_r2),
+        "fit run value R2 is inconsistent with the artifact",
+    )
     return {
         "stage": "fit",
         "config_sha256": sha256_file(config_file),
@@ -337,16 +401,6 @@ def validate_mapper_evidence(
 def _percentile(values: list[float], fraction: float) -> float:
     ordered = sorted(values)
     return ordered[round((len(ordered) - 1) * fraction)]
-
-
-def _close(actual: Any, expected: float) -> bool:
-    return (
-        isinstance(actual, int | float)
-        and not isinstance(actual, bool)
-        and math.isfinite(float(actual))
-        and math.isfinite(expected)
-        and math.isclose(float(actual), expected, rel_tol=1e-9, abs_tol=1e-12)
-    )
 
 
 def _case_metric(case: dict[str, Any], name: str, index: int) -> float:

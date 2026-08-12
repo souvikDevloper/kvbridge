@@ -41,6 +41,13 @@ python experiments/validate_hf_evidence.py configs/qwen3_0.6b_to_1.7b.t2-smoke.j
 
 For a larger calibration study on the same free-GPU pair, set the three output paths and use `configs/qwen3_0.6b_to_1.7b.t2-capacity.json`. Keep smoke and capacity evidence in separate directories.
 
+Captures made before the calibration-contract schema can be indexed without recapture only when the requested config matches exactly. The command verifies and hashes every shard, preserves the original manifest byte-for-byte, and writes a recoverable upgraded manifest:
+
+```bash
+python experiments/index_legacy_capture.py configs/qwen3_0.6b_to_1.7b.t2-capacity.json \
+  --calibration-dir data/calibration-capacity --execute
+```
+
 ## Acceptance boundary
 
 The config preregisters an attention-output cosine floor of 0.90 and a p95 one-token logit KL ceiling of 0.20. These are initial smoke gates, not universal production SLOs. A failed gate is a valid research result and must remain visible.

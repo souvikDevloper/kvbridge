@@ -1,0 +1,55 @@
+name: Partner-lab experiment
+description: Propose an independently reproducible KVBridge accelerator run
+title: "[experiment]: "
+labels:
+  - research
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for offering compute or evaluation support. Do not include credentials, proprietary prompts, raw logits, or other sensitive data.
+  - type: dropdown
+    id: tier
+    attributes:
+      label: Evidence tier
+      options:
+        - T2 small-model integration
+        - T3 paper-scale reproduction
+        - T4 research ablation
+    validations:
+      required: true
+  - type: input
+    id: model_pair
+    attributes:
+      label: Model pair
+      description: Include exact model IDs and immutable revisions when known.
+      placeholder: Qwen/Qwen3-1.7B@commit → Qwen/Qwen3-4B@commit
+    validations:
+      required: true
+  - type: textarea
+    id: hardware
+    attributes:
+      label: Available environment
+      description: GPU model/count/memory, host RAM, driver/CUDA, provider, and time limit.
+    validations:
+      required: true
+  - type: textarea
+    id: study
+    attributes:
+      label: Proposed study
+      description: State the hypothesis, configuration, metrics, gates, and estimated runtime.
+    validations:
+      required: true
+  - type: checkboxes
+    id: publication
+    attributes:
+      label: Evidence publication
+      options:
+        - label: I can publish the executable config and code commit.
+          required: true
+        - label: I can publish provenance manifests and raw per-sequence metrics.
+          required: true
+        - label: I will report rejected gates and failed runs without relabeling them as successes.
+          required: true
+        - label: I have read COLLABORATION.md and docs/EXPERIMENT_PROTOCOL.md.
+          required: true

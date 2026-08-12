@@ -14,6 +14,7 @@ from kvbridge.evidence import (
     validate_result_evidence,
 )
 from kvbridge.io import (
+    atomic_write_bytes,
     atomic_write_text,
     calibration_shard_factory,
     load_calibration_shard,
@@ -53,6 +54,15 @@ def test_atomic_text_write_replaces_complete_content(tmp_path: Path) -> None:
 
     assert destination.read_text(encoding="utf-8") == "new\n"
     assert not list(tmp_path.glob(".*.tmp"))
+
+
+def test_atomic_bytes_preserve_exact_content(tmp_path: Path) -> None:
+    destination = tmp_path / "manifest.json"
+    payload = b'{"line_endings":"preserved"}\r\n'
+
+    atomic_write_bytes(destination, payload)
+
+    assert destination.read_bytes() == payload
 
 
 def _capture_evidence(tmp_path: Path) -> tuple[Path, Path]:
@@ -171,8 +181,8 @@ def test_legacy_capture_integrity_index_is_recoverable(tmp_path: Path) -> None:
     legacy = json.loads(manifest_path.read_text(encoding="utf-8"))
     legacy.pop("calibration_contract_sha256")
     legacy.pop("shards")
-    original = json.dumps(legacy) + "\n"
-    atomic_write_text(manifest_path, original)
+    original = (json.dumps(legacy) + "\r\n").encode()
+    atomic_write_bytes(manifest_path, original)
 
     report = index_legacy_capture_evidence(
         config_path, calibration_dir, index_code_revision="index-revision"
@@ -181,20 +191,32 @@ def test_legacy_capture_integrity_index_is_recoverable(tmp_path: Path) -> None:
     assert report["shard_hashes_verified"] is True
     backups = list(calibration_dir.glob("capture_manifest.legacy-*.json"))
     assert len(backups) == 1
-    assert backups[0].read_text(encoding="utf-8") == original
+    assert backups[0].read_bytes() == original
 
 
 def _complete_evidence(tmp_path: Path) -> tuple[Path, Path, Path, Path]:
     config_path, calibration_dir = _capture_evidence(tmp_path)
     problem = make_problem(calibration_pairs=2, tokens=8)
-    artifact_dir = fit_demo(problem).save(tmp_path / "artifact")
+    mapper = fit_demo(problem)
+    artifact_dir = mapper.save(tmp_path / "artifact")
     capture_manifest = calibration_dir / "capture_manifest.json"
+    calibration_bytes = sum(
+        path.stat().st_size for path in calibration_dir.glob("*.safetensors")
+    )
     fit_run = {
         "schema_version": 1,
         "code_revision": "fit-revision",
         "capture_code_revision": "capture-revision",
         "config_sha256": sha256_file(config_path),
         "capture_manifest_sha256": sha256_file(capture_manifest),
+        "calibration_shards": 2,
+        "calibration_bytes": calibration_bytes,
+        "calibration_data_passes": 4,
+        "estimated_calibration_bytes_read": calibration_bytes * 4,
+        "artifact_storage_dtype": "float32",
+        "elapsed_seconds": 1.0,
+        "fit_key_r2_mean": sum(mapper.fit_key_r2) / len(mapper.fit_key_r2),
+        "fit_value_r2_mean": sum(mapper.fit_value_r2) / len(mapper.fit_value_r2),
     }
     atomic_write_text(artifact_dir / "fit_run.json", json.dumps(fit_run) + "\n")
     case = {
@@ -256,6 +278,17 @@ def test_complete_evidence_chain_validates(tmp_path: Path) -> None:
     assert fit_report["stage"] == "fit"
     assert result_report["stage"] == "evaluation"
     assert result_report["all_quality_gates_passed"] is True
+
+
+def test_mapper_evidence_recomputes_fit_summary(tmp_path: Path) -> None:
+    config_path, calibration_dir, artifact_dir, _ = _complete_evidence(tmp_path)
+    fit_run_path = artifact_dir / "fit_run.json"
+    payload = json.loads(fit_run_path.read_text(encoding="utf-8"))
+    payload["fit_value_r2_mean"] = -100.0
+    atomic_write_text(fit_run_path, json.dumps(payload) + "\n")
+
+    with pytest.raises(ArtifactError, match="value R2 is inconsistent"):
+        validate_mapper_evidence(config_path, calibration_dir, artifact_dir)
 
 
 def test_result_evidence_recomputes_summary(tmp_path: Path) -> None:

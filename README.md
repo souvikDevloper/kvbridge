@@ -8,7 +8,7 @@
 
 KVBridge is a production-oriented implementation and systems extension of NVIDIA's August 2026 paper, [Cross-Model KV Cache Transfer in LLM Families](https://arxiv.org/abs/2608.03893). It maps a source model's attention cache into a compatible target model so the target can continue without replaying the entire prompt.
 
-The core algorithm is paper-faithful: target-layer-specific source selection, independent K/V ridge maps, cross-head features, and RoPE removal/reapplication. The systems work around it is original to this project: bounded-memory fitting, out-of-core SafeTensors shards, resource planning, revision/tokenizer gates, tamper-evident artifacts, guarded fallback, structured telemetry, a Hugging Face handoff adapter, and a reproducible CPU validation suite.
+The core algorithm is paper-faithful: target-layer-specific source selection, independent K/V ridge maps, cross-head features, and RoPE removal/reapplication. The systems work around it is original to this project: cancellation-resistant centered statistics, bounded-memory fitting, out-of-core SafeTensors shards, resource planning, revision/tokenizer gates, tamper-evident artifacts, guarded fallback, structured telemetry, a Hugging Face handoff adapter, and a reproducible validation suite.
 
 > **Evidence boundary:** the numerical core and failure paths are tested locally. The included Qwen3 plan reproduces the paper's mapper dimensions, but this machine has no CUDA device and did not run 14B/32B quality benchmarks. Full-model claims remain a partnership experiment, never a fabricated result.
 
@@ -55,13 +55,13 @@ flowchart LR
     K["Telemetry + canary probe"] --> G
 ```
 
-Fitting is a two-stage, multi-pass process. The calibration input can be a Python sequence or a factory that reopens shards. Only sufficient statistics are retained:
+Fitting is a two-stage, multi-pass process. The calibration input can be a Python sequence or a factory that reopens shards. Only centered sufficient statistics are retained:
 
 \[
 W=(X^T X + \lambda I)^{-1}X^T Y,\qquad b=\bar{Y}-\bar{X}W
 \]
 
-Target-layer blocking bounds peak memory. For Qwen3 14B→32B at `k=8`, the planner reports a 1,073,872,896-parameter (4.0005 GiB FP32) artifact and about 0.56 GiB of fit statistics per one-layer block. The cost is more sequential passes over calibration shards; this is intentional and configurable.
+Target-layer blocking bounds peak memory. Batchwise Chan/Welford updates accumulate centered covariance directly, avoiding cancellation from subtracting large raw moments after a scale run. For Qwen3 14B→32B at `k=8`, the planner reports a 1,073,872,896-parameter (4.0005 GiB FP32) artifact and about 0.56 GiB of fit statistics per one-layer block. The cost is more sequential passes over calibration shards; this is intentional and configurable.
 
 ## Local evidence
 
@@ -147,7 +147,7 @@ Production rollout should progress through:
 | T3 | Multi-GPU lab | Qwen3 14B→32B paper reproduction | Partnership-ready config |
 | T4 | Multi-lab | Long-context, quantized, distribution-shift study | Proposed protocol |
 
-See [architecture](docs/ARCHITECTURE.md), [experiment protocol](docs/EXPERIMENT_PROTOCOL.md), [threat model](docs/THREAT_MODEL.md), and [production checklist](docs/PRODUCTION_CHECKLIST.md).
+See [architecture](docs/ARCHITECTURE.md), [experiment protocol](docs/EXPERIMENT_PROTOCOL.md), [collaboration tracks](COLLABORATION.md), [threat model](docs/THREAT_MODEL.md), and [production checklist](docs/PRODUCTION_CHECKLIST.md).
 
 ### Free-GPU real-model path
 
@@ -159,7 +159,7 @@ cd kvbridge
 bash scripts/kaggle_t2_smoke.sh
 ```
 
-The driver is stage-resumable by default. It reuses calibration, mapper, or evaluation output only after validating config/model provenance, SafeTensors structure, per-shard SHA-256 records, mapper checksums, and recomputed result aggregates. Set `KVBRIDGE_RESUME=0` for a clean fail-closed run into empty paths.
+The driver is stage-resumable by default. It reuses calibration, mapper, or evaluation output only after validating config/model provenance, SafeTensors structure, per-shard SHA-256 records, mapper checksums, finite standard-JSON metrics, and recomputed aggregates and bootstrap confidence intervals. Set `KVBRIDGE_RESUME=0` for a clean fail-closed run into empty paths.
 
 See the [free-GPU runbook](docs/FREE_GPU_T2.md). The repository does not call this successful until the raw result exists and its preregistered gates pass.
 

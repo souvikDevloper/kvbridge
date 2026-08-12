@@ -8,7 +8,7 @@ Technical Report v0.2 - 12 August 2026
 
 Cross-model KV-cache transfer can eliminate redundant target-model prefill when a serving system switches between differently sized members of an LLM family. Heo et al. recently showed that this relationship contains substantial linear structure and proposed a closed-form per-head ridge mapper with target-specific source-layer selection and position-free key mapping. Their strongest same-family pairs retained 73-98% of target standalone accuracy while mapping was 2.7-25 times faster than target re-prefill. Turning the method into a deployable component, however, introduces requirements beyond the estimator: bounded host memory, out-of-core calibration, model and tokenizer identity, exact rotary-position handling, artifact provenance, cache API integration, observability, and safe fallback.
 
-We present KVBridge, an independent production-oriented implementation and systems extension. KVBridge computes mergeable sufficient statistics, fits target layers in configurable blocks, captures RoPE factors from the models instead of reconstructing scaling rules, persists data and weights without pickle, and treats rejection as a normal serving outcome. On three CPU-only synthetic model families, it exactly recovered all planted source-layer relationships and achieved holdout cache R² between 0.99999873 and 0.99999895. Median mapping latency ranged from 0.339 ms for a 64-token micro case to 2.844 ms for a 256-token medium case. These results validate structural correctness, not real-model downstream quality. A deterministic resource analysis for Qwen3 14B to 32B reproduces a 1.074-billion-parameter, 4.0005-GiB FP32 mapper while bounding one-layer fit statistics to approximately 0.56 GiB through repeated shard passes. We release a staged protocol for small-model integration and multi-lab Qwen3 reproduction, explicitly reserving real-model quality and GPU speed claims for future partnership runs.
+We present KVBridge, an independent production-oriented implementation and systems extension. KVBridge computes cancellation-resistant mergeable centered statistics, fits target layers in configurable blocks, captures RoPE factors from the models instead of reconstructing scaling rules, persists data and weights without pickle, and treats rejection as a normal serving outcome. On three CPU-only synthetic model families, it exactly recovered all planted source-layer relationships and achieved holdout cache R² between 0.99999873 and 0.99999895. Median mapping latency ranged from 0.339 ms for a 64-token micro case to 2.844 ms for a 256-token medium case. These results validate structural correctness, not real-model downstream quality. A deterministic resource analysis for Qwen3 14B to 32B reproduces a 1.074-billion-parameter, 4.0005-GiB FP32 mapper while bounding one-layer fit statistics to approximately 0.56 GiB through repeated shard passes. We release a staged protocol for small-model integration and multi-lab Qwen3 reproduction, explicitly reserving paper-scale quality and GPU speed claims for future partnership runs.
 
 **Keywords:** LLM serving, KV cache, prefill, representation alignment, ridge regression, systems reproducibility
 
@@ -60,9 +60,9 @@ RoPE applies an orthogonal, position-dependent rotation to keys. Instead of reco
 
 Naively retaining all calibration tokens is unnecessary. For each ridge system, KVBridge accumulates:
 
-`n, sum(X), sum(Y), X^T X, X^T Y, and sum(Y^2)`.
+`n, mean(X), mean(Y), M2(X), C(X,Y), and M2(Y)`.
 
-These statistics recover centered covariance, slope, bias, residual error, and R². They merge across shards or processes and support `torch.distributed` all-reduce. Calibration files use SafeTensors and a factory abstraction so each pass reopens only one aligned cache pair at a time.
+Batchwise and distributed merges apply the Chan correction term, so covariance is not recovered by subtracting two large raw moments after accumulation. These statistics directly provide centered covariance, slope, bias, residual error, and R². They merge across shards or processes and support `torch.distributed` all-reduce. Calibration files use SafeTensors and a factory abstraction so each pass reopens only one aligned cache pair at a time.
 
 Let `d_s = k H_s D_s` and `d_t = H_t D_t`. One target layer retains separate K and V statistics with approximate storage
 
@@ -107,7 +107,7 @@ The FP32/BF16 experiment saves and reloads the same fitted mapper, then evaluate
 
 ### 4.4 Software tests
 
-The 30-test suite covers split-half and interleaved RoPE round trips, invalid cache shapes, missing factors, affine ridge recovery, accumulator merging, deterministic tokenizer fingerprints, compatibility rejection, source selection, unseen-sequence mapping, token-strided fitting, CPU/CUDA accumulation rejection, attention-output metrics, logit-KL policy, BF16 artifacts, device residency, SafeTensors round trips, tamper detection, re-iterable calibration shards, resource formulas, runtime acceptance, and visible fallback.
+The 50-test suite covers split-half and interleaved RoPE round trips, invalid cache shapes, missing factors, affine ridge recovery, centered accumulator merging, deterministic tokenizer fingerprints, compatibility rejection, source selection, unseen-sequence mapping, token-strided fitting, CPU/CUDA accumulation rejection, attention-output metrics, logit-KL policy, BF16 artifacts, device residency, SafeTensors round trips, tamper detection, strict JSON evidence validation, calibration-contract migration, re-iterable calibration shards, resource formulas, runtime acceptance, and visible fallback.
 
 ### 4.4 Reproducibility controls
 

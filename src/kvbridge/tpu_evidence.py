@@ -75,6 +75,10 @@ def _validate_xla_environment(payload: dict[str, Any]) -> None:
     _require(isinstance(xla, dict), "evidence has no XLA runtime manifest")
     xla = cast(dict[str, Any], xla)
     _require(xla.get("spmd") is True, "evidence was not recorded in XLA SPMD mode")
+    _require(
+        xla.get("model_sharding_strategy") == "spmd_largest_axis",
+        "evidence has an unsupported XLA model-sharding strategy",
+    )
     devices = xla.get("global_runtime_devices")
     _require(
         isinstance(devices, int) and devices >= 8,

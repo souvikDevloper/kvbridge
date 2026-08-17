@@ -34,10 +34,10 @@ class HFCapture:
 def _metadata_model(model: Any) -> Any:
     """Return the underlying HF model used for configuration and layer access.
 
-    PyTorch/XLA FSDPv2 keeps the wrapped module in ``_orig_module`` and does
-    not proxy Hugging Face helpers such as ``get_input_embeddings``.  Forward
-    calls must still use the wrapper, while metadata and hooks must target the
-    original module whose parameters have already been moved to XLA.
+    Some distributed wrappers keep the wrapped module in ``_orig_module`` and
+    do not proxy Hugging Face helpers such as ``get_input_embeddings``. Forward
+    calls must still use the wrapper, while metadata and hooks target the
+    original module.
     """
     seen: set[int] = set()
     while hasattr(model, "_orig_module") and id(model) not in seen:

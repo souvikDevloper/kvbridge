@@ -21,7 +21,7 @@ The core algorithm is paper-faithful: target-layer-specific source selection, in
 | Position handling | Exact inverse/forward RoPE using factors emitted by each model |
 | Scale fitting | Vectorized centered statistics on CPU/CUDA/XLA; target-layer blocks |
 | Distributed path | Mergeable sufficient statistics plus `torch.distributed` all-reduce |
-| TPU path | Sequential model residency, PyTorch/XLA SPMD FSDPv2, restartable layer checkpoints |
+| TPU path | Sequential model residency, PyTorch/XLA FSDP-style SPMD parameter sharding, restartable layer checkpoints |
 | Data plane | SafeTensors calibration shards; no pickle deserialization |
 | Artifact plane | Atomic writes, SHA-256, model fingerprints, measured FP32/BF16 storage |
 | Runtime safety | Shape/architecture/numerical/latency/logit-KL gates, explicit fallback |

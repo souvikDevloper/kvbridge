@@ -74,6 +74,7 @@ def _write_fixture(tmp_path: Path) -> tuple[Path, Path, Path]:
                 "global_runtime_devices": 8,
                 "addressable_runtime_devices": 8,
                 "spmd": True,
+                "model_sharding_strategy": "spmd_largest_axis",
             }
         },
     }

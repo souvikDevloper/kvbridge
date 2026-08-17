@@ -31,8 +31,8 @@ from kvbridge.xla import (
     XLAContext,
     initialize_xla,
     shard_batch,
+    shard_model_for_inference,
     sync_xla,
-    wrap_model_for_fsdp,
     xla_runtime_manifest,
 )
 
@@ -109,7 +109,7 @@ def _capture_model(
             low_cpu_mem_usage=True,
         ).eval()
         actual = model_signature(model, tokenizer, revision=revision)
-        model = wrap_model_for_fsdp(model, context).eval()
+        model = shard_model_for_inference(model, context).eval()
         for start in range(0, len(rows), batch_size):
             batch, logical = _padded_batch(rows, start, batch_size)
             mask = torch.ones_like(batch)

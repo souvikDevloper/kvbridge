@@ -7,7 +7,6 @@ hosts while TPU jobs use the PyTorch/XLA version supplied by their runtime.
 
 from __future__ import annotations
 
-import functools
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
@@ -17,7 +16,6 @@ import torch
 from torch import Tensor
 
 from kvbridge.cache import KVCache, RotaryFactors
-from kvbridge.errors import CompatibilityError
 
 
 @dataclass(frozen=True, slots=True)
@@ -30,7 +28,7 @@ class XLAContext:
 def initialize_xla(
     *, min_devices: int = 8, compilation_cache: str | Path | None = None
 ) -> XLAContext:
-    """Enable single-process SPMD and build an FSDP mesh."""
+    """Enable single-process SPMD and build an FSDP-style parameter mesh."""
     try:
         import torch_xla.distributed.spmd as xs  # type: ignore[import-not-found, unused-ignore]
         import torch_xla.runtime as xr  # type: ignore[import-not-found, unused-ignore]
@@ -58,76 +56,38 @@ def initialize_xla(
     return XLAContext(torch.device("xla"), mesh, runtime_devices)
 
 
-def _decoder_layers(model: Any) -> Any:
-    candidates = [
-        getattr(model, "layers", None),
-        getattr(getattr(model, "model", None), "layers", None),
-        getattr(getattr(getattr(model, "model", None), "model", None), "layers", None),
-    ]
-    for candidate in candidates:
-        if candidate is not None and len(candidate) > 0:
-            return candidate
-    raise CompatibilityError("model does not expose supported decoder layers for XLA FSDP")
-
-
-def _cache_layers(cache: Any) -> list[tuple[Tensor, Tensor]]:
-    if hasattr(cache, "to_legacy_cache"):
-        cache = cache.to_legacy_cache()
-    if isinstance(cache, tuple | list):
-        return [(layer[0], layer[1]) for layer in cache]
-    if hasattr(cache, "layers"):
-        return [(layer.keys, layer.values) for layer in cache.layers]
-    return []
-
-
-def _is_xla_sharded_tensor(tensor: Tensor) -> bool:
-    tensor_type = type(tensor)
-    return (
-        tensor_type.__name__ == "XLAShardedTensor"
-        and tensor_type.__module__.startswith("torch_xla.")
+def _largest_axis_partition_spec(tensor: Tensor) -> tuple[str | None, ...]:
+    """Shard a tensor on its largest axis, matching XLA FSDPv2's policy."""
+    if tensor.ndim == 0:
+        return ()
+    largest_axis = max(range(tensor.ndim), key=lambda axis: tensor.shape[axis])
+    return tuple(
+        "fsdp" if axis == largest_axis else None for axis in range(tensor.ndim)
     )
 
 
-def wrap_model_for_fsdp(model: Any, context: XLAContext) -> Any:
-    """Move a decoder-only model to XLA and shard parameters/activations."""
+def shard_model_for_inference(model: Any, context: XLAContext) -> Any:
+    """Move a model to XLA and apply stable FSDP-style SPMD parameter sharding.
+
+    PyTorch/XLA 2.8's experimental FSDPv2 module wrapper can propagate an
+    incomplete ``XLAShardedTensor`` through Hugging Face cache outputs and crash
+    the PJRT worker during inference.  Inference does not need FSDP's backward
+    hooks, so this follows the underlying documented SPMD formulation directly:
+    parameters are sharded on their largest axis and input batches on axis zero.
+    """
     try:
         import torch_xla.distributed.spmd as xs  # type: ignore[import-not-found, unused-ignore]
-        from torch_xla.distributed.fsdp.wrap import (  # type: ignore[import-not-found, unused-ignore]
-            transformer_auto_wrap_policy,
-        )
-        from torch_xla.experimental.spmd_fully_sharded_data_parallel import (  # type: ignore[import-not-found, unused-ignore]
-            SpmdFullyShardedDataParallel as FSDPv2,
-        )
     except ImportError as error:
-        raise RuntimeError("this torch_xla build does not provide SPMD FSDPv2") from error
+        raise RuntimeError("torch_xla is unavailable") from error
 
-    decoder_type = type(_decoder_layers(model)[0])
-    auto_wrap_policy = functools.partial(
-        transformer_auto_wrap_policy,
-        transformer_layer_cls={decoder_type},
-    )
-    def shard_output(output: Any, mesh: Any) -> None:
-        def mark(tensor: Tensor, partition_spec: tuple[str | None, ...]) -> None:
-            # torch_xla 2.8 may propagate XLAShardedTensor through the model.
-            # Re-marking that wrapper enters an incompatible unwrap path, while
-            # its existing sharding is already the desired batch partition.
-            if not _is_xla_sharded_tensor(tensor):
-                xs.mark_sharding(tensor, mesh, partition_spec)
-
-        for name in ("last_hidden_state", "logits"):
-            tensor = getattr(output, name, None)
-            if isinstance(tensor, Tensor):
-                mark(tensor, ("fsdp", None, None))
-        for key, value in _cache_layers(getattr(output, "past_key_values", None)):
-            mark(key, ("fsdp", None, None, None))
-            mark(value, ("fsdp", None, None, None))
-
-    return FSDPv2(
-        model,
-        mesh=context.mesh,
-        auto_wrap_policy=auto_wrap_policy,
-        shard_output=shard_output,
-    )
+    model = model.to(context.device)
+    for parameter in model.parameters():
+        xs.mark_sharding(
+            parameter,
+            context.mesh,
+            _largest_axis_partition_spec(parameter),
+        )
+    return model
 
 
 def shard_batch(tensor: Tensor, context: XLAContext) -> Tensor:
@@ -207,4 +167,5 @@ def xla_runtime_manifest(context: XLAContext) -> dict[str, Any]:
         "global_runtime_devices": context.runtime_devices,
         "addressable_runtime_devices": int(addressable),
         "spmd": bool(xr.is_spmd()),
+        "model_sharding_strategy": "spmd_largest_axis",
     }

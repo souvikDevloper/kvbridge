@@ -28,7 +28,7 @@ Official references: [Kaggle TPU guide](https://www.kaggle.com/docs/tpu),
 The legacy capture path co-loads both models and writes roughly 406 GiB of
 unsampled caches for the 500-sequence paper configuration. The TPU path instead:
 
-1. loads and FSDP-shards only Qwen3-14B;
+1. loads only Qwen3-14B and shards each parameter across the SPMD mesh;
 2. captures content-space K/V and applies stride four before gathering to host;
 3. releases the source model and its temporary download cache;
 4. repeats capture with Qwen3-32B;

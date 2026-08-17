@@ -40,8 +40,8 @@ from kvbridge.xla import (
     initialize_xla,
     shard_batch,
     shard_cache,
+    shard_model_for_inference,
     sync_xla,
-    wrap_model_for_fsdp,
     xla_runtime_manifest,
 )
 
@@ -130,7 +130,7 @@ def _capture_source_batches(
             low_cpu_mem_usage=True,
         ).eval()
         actual = model_signature(model, tokenizer, revision=config.source.revision)
-        model = wrap_model_for_fsdp(model, context).eval()
+        model = shard_model_for_inference(model, context).eval()
         for start in range(0, len(prefixes), batch_size):
             batch = torch.stack(prefixes[start : start + batch_size])
             mask = torch.ones_like(batch)
@@ -271,7 +271,7 @@ def main() -> int:
         actual_target = model_signature(target, target_tokenizer, revision=config.target.revision)
         if actual_target.fingerprint != mapper.target_signature.fingerprint:
             raise RuntimeError("target model differs from the mapper artifact")
-        target = wrap_model_for_fsdp(target, context).eval()
+        target = shard_model_for_inference(target, context).eval()
 
         def evaluate_batch(batch_index: int) -> dict[str, Any]:
             start = batch_index * args.batch_size

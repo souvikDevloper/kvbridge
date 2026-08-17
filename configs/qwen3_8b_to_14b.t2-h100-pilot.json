@@ -1,0 +1,56 @@
+{
+  "name": "qwen3-8b-to-14b-h100-h200-t2-pilot",
+  "evidence_tier": "T2",
+  "source": {
+    "model_id": "Qwen/Qwen3-8B",
+    "revision": "b968826d9c46dd6066d109eabc6255188de91218",
+    "tokenizer_hash": "RESOLVE_AND_PIN_AT_CALIBRATION",
+    "num_layers": 36,
+    "num_kv_heads": 8,
+    "head_dim": 128,
+    "attention_kind": "dense",
+    "architecture": "Qwen3ForCausalLM"
+  },
+  "target": {
+    "model_id": "Qwen/Qwen3-14B",
+    "revision": "40c069824f4251a91eefaf281ebe4c544efd3e18",
+    "tokenizer_hash": "RESOLVE_AND_PIN_AT_CALIBRATION",
+    "num_layers": 40,
+    "num_kv_heads": 8,
+    "head_dim": 128,
+    "attention_kind": "dense",
+    "architecture": "Qwen3ForCausalLM"
+  },
+  "fit": {
+    "top_k": 4,
+    "ridge_alpha": 0.01,
+    "content_space": true,
+    "selection_alpha": 1e-06,
+    "accumulation_dtype": "float32",
+    "accumulation_device": "cuda",
+    "require_matched_kv": true,
+    "target_layer_block_size": 1,
+    "selection_target_layer_block_size": 4
+  },
+  "calibration": {
+    "dataset": "HuggingFaceFW/fineweb-edu",
+    "dataset_revision": "87f09149ef4734204d70ed1d046ddc9ca3f2b8f9",
+    "split": "train",
+    "sequences": 32,
+    "tokens": 1024,
+    "stride": 4
+  },
+  "evaluation": {
+    "sequences": 8,
+    "tokens": 512,
+    "dataset_skip": 8192,
+    "max_suffix_tokens": 1,
+    "attention_cosine_floor": 0.90,
+    "logit_kl_ceiling": 0.20
+  },
+  "model_dtype": "bfloat16",
+  "attention_implementation": "sdpa",
+  "artifact_storage_dtype": "bfloat16",
+  "cache_dtype_bytes": 2,
+  "artifact_dtype_bytes": 2
+}

@@ -2,13 +2,13 @@
 
 **Souvik**<br>
 Independent Researcher<br>
-Technical Report v0.2 - 12 August 2026
+Technical Report v0.3 - 17 August 2026
 
 ## Abstract
 
 Cross-model KV-cache transfer can eliminate redundant target-model prefill when a serving system switches between differently sized members of an LLM family. Heo et al. recently showed that this relationship contains substantial linear structure and proposed a closed-form per-head ridge mapper with target-specific source-layer selection and position-free key mapping. Their strongest same-family pairs retained 73-98% of target standalone accuracy while mapping was 2.7-25 times faster than target re-prefill. Turning the method into a deployable component, however, introduces requirements beyond the estimator: bounded host memory, out-of-core calibration, model and tokenizer identity, exact rotary-position handling, artifact provenance, cache API integration, observability, and safe fallback.
 
-We present KVBridge, an independent production-oriented implementation and systems extension. KVBridge computes cancellation-resistant mergeable centered statistics, fits target layers in configurable blocks, captures RoPE factors from the models instead of reconstructing scaling rules, persists data and weights without pickle, and treats rejection as a normal serving outcome. On three CPU-only synthetic model families, it exactly recovered all planted source-layer relationships and achieved holdout cache R² between 0.99999873 and 0.99999895. Median mapping latency ranged from 0.339 ms for a 64-token micro case to 2.844 ms for a 256-token medium case. These results validate structural correctness, not real-model downstream quality. A deterministic resource analysis for Qwen3 14B to 32B reproduces a 1.074-billion-parameter, 4.0005-GiB FP32 mapper while bounding one-layer fit statistics to approximately 0.56 GiB through repeated shard passes. We release a staged protocol for small-model integration and multi-lab Qwen3 reproduction, explicitly reserving paper-scale quality and GPU speed claims for future partnership runs.
+We present KVBridge, an independent production-oriented implementation and systems extension. KVBridge computes cancellation-resistant mergeable centered statistics, fits target layers in configurable blocks, captures RoPE factors from the models instead of reconstructing scaling rules, persists data and weights without pickle, and treats rejection as a normal serving outcome. On three CPU-only synthetic model families, it exactly recovered all planted source-layer relationships and achieved holdout cache R² between 0.99999873 and 0.99999895. A revision-pinned Qwen3 0.6B→1.7B integration on a free Tesla T4 mapped the prefix 3.074× faster than target prefix prefill at the median but failed both preregistered quality gates: attention-output cosine had mean 0.6568 and minimum 0.2937, while one-token logit KL had mean 1.6145 and p95 4.5903. This negative result demonstrates why speed and reconstruction metrics cannot authorize serving without attention/logit gates. A deterministic resource analysis for Qwen3 14B→32B reproduces a 1.074-billion-parameter, 4.0005-GiB FP32 mapper while bounding one-layer fit statistics to approximately 0.56 GiB through repeated shard passes. We release raw small-model rows, a lightweight provenance validator, and a staged multi-lab protocol, explicitly reserving paper-scale quality and H100/H200 speed claims for future runs.
 
 **Keywords:** LLM serving, KV cache, prefill, representation alignment, ridge regression, systems reproducibility
 
@@ -93,7 +93,7 @@ We separate four tiers:
 - T2: small same-family real-model integration on an available GPU.
 - T3: full Qwen3 14B to 32B reproduction and new ablations on partner-lab accelerators.
 
-This report contains T0-T1 measurements and T3 resource estimates. It contains no T2-T3 quality or GPU latency result.
+This report contains T0-T1 measurements, one rejected T2 smoke result, and T3 resource estimates. It contains no T3 quality or H100/H200 latency result.
 
 ### 4.2 Synthetic construction
 
@@ -105,11 +105,17 @@ Latency measurements use 10 warmups and 100 timed mappings. They run on Windows,
 
 The FP32/BF16 experiment saves and reloads the same fitted mapper, then evaluates unseen-cache R² and attention-output cosine under identical grouped-query attention. BF16 reduced the SafeTensors file from 201,608 to 101,760 bytes (50.47% of FP32). Mean attention-output cosine changed from 0.99999907 to 0.99999659, a delta of -0.00000247, on the synthetic case. This supports compact artifact transport in the tested linear setting; it is not evidence that BF16 preserves real-model task accuracy.
 
-### 4.4 Software tests
+### 4.4 Real-model T2 evidence
 
-The 50-test suite covers split-half and interleaved RoPE round trips, invalid cache shapes, missing factors, affine ridge recovery, centered accumulator merging, deterministic tokenizer fingerprints, compatibility rejection, source selection, unseen-sequence mapping, token-strided fitting, CPU/CUDA accumulation rejection, attention-output metrics, logit-KL policy, BF16 artifacts, device residency, SafeTensors round trips, tamper detection, strict JSON evidence validation, calibration-contract migration, re-iterable calibration shards, resource formulas, runtime acceptance, and visible fallback.
+The Qwen3 0.6B→1.7B smoke run used 16 revision-pinned FineWeb-Edu sequences of 512 tokens with stride 4, producing 2,048 calibration observations. Eight held-out 256-token sequences were evaluated on a Tesla T4. The BF16 artifact contains 58,777,600 parameters; fitting took 128.68 seconds and reported 542,900,224 bytes of peak CUDA allocation. The run is bound to code revision `e69e139` and publishes the capture, mapper, fit, and result manifests plus all unaggregated evaluation rows.
 
-### 4.4 Reproducibility controls
+The config preregistered a minimum attention-output cosine of 0.90 and a p95 one-token logit KL ceiling of 0.20. Both failed. KVBridge therefore classifies the execution as valid evidence but rejects the model pair/configuration for serving. A preceding larger top-k-4 stress attempt failed the finite-tensor boundary and was excluded rather than converted into a result; it motivated exact diagonal equilibration and a CPU-FP64 recovery path in the closed-form solver. That capacity configuration remains pending a clean rerun.
+
+### 4.5 Software tests
+
+The 53-test suite covers split-half and interleaved RoPE round trips, invalid cache shapes, missing factors, affine ridge recovery, centered accumulator merging, extreme feature-scale equilibration, non-finite statistic rejection, deterministic tokenizer fingerprints, compatibility rejection, source selection, unseen-sequence mapping, token-strided fitting, CPU/CUDA accumulation rejection, attention-output metrics, logit-KL policy, BF16 artifacts, device residency, SafeTensors round trips, tamper detection, strict and lightweight JSON evidence validation, calibration-contract migration, re-iterable calibration shards, resource formulas, runtime acceptance, and visible fallback.
+
+### 4.6 Reproducibility controls
 
 The repository records the local environment beside raw JSON and CSV outputs, uses deterministic synthetic seeds, separates warmup from timed iterations, and checks generated artifacts back into a schema-versioned evidence path. The Qwen3 planner is driven by the same JSON configuration intended for capture, preventing documentation-only resource numbers from drifting away from executable settings.
 
@@ -127,13 +133,29 @@ Release verification combines static lint, a two-version CI matrix, unit and adv
 
 Every planted source layer was recovered, and all holdout scores exceeded the preregistered structural threshold. Latency rose with target depth, token count, and feature width as expected. Because the synthetic target is exactly affine, these near-perfect scores test implementation fidelity; they do not imply that a real model pair will retain equivalent downstream accuracy.
 
-### 5.2 Qwen3 resource plan
+### 5.2 Qwen3 0.6B→1.7B T2 result
+
+| Metric | Estimate | 95% bootstrap interval where defined |
+|---|---:|---:|
+| Cache R² mean | 0.234721 | [0.143677, 0.313710] |
+| Attention cosine mean | 0.656811 | [0.633500, 0.674282] |
+| Attention cosine minimum | 0.293665 | — |
+| Logit KL mean | 1.614515 | [0.858162, 2.613657] |
+| Logit KL p95 | 4.590321 | — |
+| Next-token agreement | 0.25 | [0.00, 0.625] |
+| Transfer median / p95 | 46.090 / 54.234 ms | — |
+| Target prefix-prefill median | 87.291 ms | — |
+| Per-case prefill/transfer ratio median | 3.074× | — |
+
+The estimates come from only eight evaluation sequences and are deliberately presented with raw rows and deterministic bootstrap intervals rather than extrapolated to paper-scale behavior. The attention and KL failures agree with the low 25% next-token agreement. This pair provides a concrete failure-path case: a serving system that optimized only latency would accept it, while the preregistered quality policy correctly falls back.
+
+### 5.3 Qwen3 resource plan
 
 For Qwen3 14B to 32B, `H_s = H_t = 8`, `D_s = D_t = 128`, `L_s = 40`, `L_t = 64`, and `k = 8`. KVBridge computes 1,073,872,896 parameters including biases and 4.0005 GiB at FP32. This agrees with the approximately 1.07-billion/4-GB source-paper configuration [1].
 
 With FP32 sufficient statistics, a one-target-layer fit block requires an estimated 0.5626 GiB; an eight-layer selection block requires 0.6299 GiB. One BF16 1,024-token aligned source/target cache pair is approximately 0.4063 GiB. The selected blocks require 72 sequential calibration passes (8 selection plus 64 fit). At 25-50 GB/s host-to-device bandwidth, loading the artifact is estimated at 172-86 ms, close to the source paper's computed range. These are formula-based planning numbers, not measured accelerator results.
 
-### 5.3 Failure-path evidence
+### 5.4 Failure-path evidence
 
 The tests alter one byte in a mapper tensor file and verify that loading fails before mapping. A separate guarded-runtime test forces the application quality probe to reject an otherwise valid cache; the request takes the full-prefill fallback and emits a fallback event. These are small tests, but they establish the control-flow property production depends on: rejection is explicit, testable, and non-fatal.
 
@@ -163,7 +185,7 @@ A partner run should publish model commits, tokenizer hashes, container digest, 
 
 ## 7. Limitations and threats to validity
 
-The local evaluation uses intentionally linear synthetic relationships and cannot measure emergent model behavior, attention sensitivity, downstream accuracy, generation stability, or GPU speed. CPU latencies are single-host measurements without process isolation and should not be compared to the source paper's H100 results. The Hugging Face adapter targets Qwen/Llama-style model-level rotary embeddings and DynamicCache; dependency changes require new integration tests.
+The synthetic evaluation uses intentionally linear relationships and cannot measure emergent model behavior. The T2 result adds real attention/logit evidence but uses one small pair, one T4, eight evaluation sequences, one-token suffix KL, and no downstream benchmark; it cannot establish production quality or generalize to 14B→32B. CPU and T4 latencies are single-host measurements without process isolation and should not be compared to the source paper's H100 results. The Hugging Face adapter targets Qwen/Llama-style model-level rotary embeddings and DynamicCache; dependency changes require new integration tests.
 
 The memory planner omits framework allocator fragmentation, model residency, dataset pipeline buffers, communication workspaces, and operating-system pressure. It is a preflight lower-level estimate, not a capacity guarantee. SHA-256 provides integrity but not authentic provenance. Finally, matched KV and shared tokenization are safety gates, not proofs of transferability.
 
@@ -173,7 +195,7 @@ Avoiding redundant prefill could reduce latency, energy, and accelerator demand 
 
 ## 9. Conclusion
 
-KVBridge demonstrates that production completeness and modest local resources are compatible when evidence boundaries are explicit. The project implements the closed-form transfer method, bounds its calibration memory, packages artifacts safely, exposes resource costs, and makes failure observable. CPU experiments validate the numerical and control-flow core, while the Qwen3 configuration and multi-lab protocol preserve a credible path to full-model evaluation. The remaining question is empirical rather than rhetorical: which model pairs and compressed artifact regimes meet attention-aware quality gates at serving scale? That question is ready for a transparent partner-lab run.
+KVBridge demonstrates that production completeness and modest local resources are compatible when evidence boundaries are explicit. The project implements the closed-form transfer method, bounds its calibration memory, packages artifacts safely, exposes resource costs, and makes failure observable. CPU experiments validate the numerical/control-flow core, while the rejected T2 run shows the gates working on a real model pair: measured speed did not override unacceptable attention and logit drift. The Qwen3 14B→32B configuration and multi-lab protocol preserve a credible path to full-model evaluation. The remaining question is empirical rather than rhetorical: which model pairs and compressed artifact regimes meet attention-aware quality gates at serving scale? That question is ready for a transparent high-memory or partner-lab run.
 
 ## References
 

@@ -1,0 +1,148 @@
+{
+  "schema_version": 1,
+  "config": "/content/kvbridge/configs/qwen3_0.6b_to_1.7b.t2-smoke.json",
+  "config_sha256": "bbd8e280e805988de481d681a6b3d1aace9c1cee15ccec669f6b4a1566c86eca",
+  "calibration_contract_sha256": "31435a47133c1cfdc8f8fb7f194b9c47d497795dd3a90e6321282f685cb7c891",
+  "code_revision": "e69e13922f4a4e7d13110d4b3fd6c1056e1d15a4",
+  "dataset": "HuggingFaceFW/fineweb-edu",
+  "dataset_revision": "87f09149ef4734204d70ed1d046ddc9ca3f2b8f9",
+  "split": "train",
+  "sequences": 16,
+  "tokens": 512,
+  "source_fingerprint": "c81bc78c29e18377d5859dca4b1b3d80ed0742ad7ebc7c64fbff9b85d50a12d5",
+  "target_fingerprint": "477a14d6a0c973029f8d0d0f04a8415541ce029849e25d6b3788ed5ddd39fa93",
+  "source_signature": {
+    "model_id": "Qwen/Qwen3-0.6B",
+    "revision": "167b8104f88905a951069f5f95f9776908da5f68",
+    "tokenizer_hash": "18bd42540b46bad3f59e9630317d9174b026d376e3ab7dd56bfb3e343e9ff183",
+    "num_layers": 28,
+    "num_kv_heads": 8,
+    "head_dim": 128,
+    "attention_kind": "dense",
+    "architecture": "Qwen3ForCausalLM"
+  },
+  "target_signature": {
+    "model_id": "Qwen/Qwen3-1.7B",
+    "revision": "8d4744f9e13072f4920c326350fa81eedb74eae9",
+    "tokenizer_hash": "18bd42540b46bad3f59e9630317d9174b026d376e3ab7dd56bfb3e343e9ff183",
+    "num_layers": 28,
+    "num_kv_heads": 8,
+    "head_dim": 128,
+    "attention_kind": "dense",
+    "architecture": "Qwen3ForCausalLM"
+  },
+  "tokenizer_hash": "18bd42540b46bad3f59e9630317d9174b026d376e3ab7dd56bfb3e343e9ff183",
+  "shards": [
+    {
+      "name": "00000.safetensors",
+      "bytes": 117965768,
+      "sha256": "306472d3e1185ed24e64c1f23104f496fadc5a09aa60ae68f2963c32578dd198",
+      "sequence_id": "HuggingFaceFW/fineweb-edu:train:0"
+    },
+    {
+      "name": "00001.safetensors",
+      "bytes": 117965768,
+      "sha256": "52d1b0491b08d43db647fc7fef4e0d766a871a28a32a516e6e3c5d769a840b30",
+      "sequence_id": "HuggingFaceFW/fineweb-edu:train:4"
+    },
+    {
+      "name": "00002.safetensors",
+      "bytes": 117965768,
+      "sha256": "32b87d9a294c728b76f5862195cfe8c53641fae6e296234e7767621da212ec8c",
+      "sequence_id": "HuggingFaceFW/fineweb-edu:train:5"
+    },
+    {
+      "name": "00003.safetensors",
+      "bytes": 117965768,
+      "sha256": "b5c61cfe641145c0f20c97b7189976119956924861f87c73579c534ae7c4e42c",
+      "sequence_id": "HuggingFaceFW/fineweb-edu:train:7"
+    },
+    {
+      "name": "00004.safetensors",
+      "bytes": 117965768,
+      "sha256": "e0f246360ff147c508863b96d30df2ea9bbcdba8589233334208a3f1d8746c62",
+      "sequence_id": "HuggingFaceFW/fineweb-edu:train:8"
+    },
+    {
+      "name": "00005.safetensors",
+      "bytes": 117965768,
+      "sha256": "24fe021f27dbfd3a2321a2f8e23dd84f6b32dc301c5b6a4cc241f81639119f4e",
+      "sequence_id": "HuggingFaceFW/fineweb-edu:train:9"
+    },
+    {
+      "name": "00006.safetensors",
+      "bytes": 117965768,
+      "sha256": "941e99ebdc1f2c9a692d9322df90c7c33a1948fc48319fe749a709cc232ddff3",
+      "sequence_id": "HuggingFaceFW/fineweb-edu:train:11"
+    },
+    {
+      "name": "00007.safetensors",
+      "bytes": 117965768,
+      "sha256": "132823e17dbc60ad839c046248f653b00de9535c33e397611d61c5ad6eb33c74",
+      "sequence_id": "HuggingFaceFW/fineweb-edu:train:14"
+    },
+    {
+      "name": "00008.safetensors",
+      "bytes": 117965768,
+      "sha256": "919cd0be5629886618a3e4de931e0f573963c4faf50e4c64de31ee2c38bf2b40",
+      "sequence_id": "HuggingFaceFW/fineweb-edu:train:16"
+    },
+    {
+      "name": "00009.safetensors",
+      "bytes": 117965768,
+      "sha256": "5ccbe2e24ead71995e5531a0ffde30e6cb6e5185edf161bb490b8d647319cb95",
+      "sequence_id": "HuggingFaceFW/fineweb-edu:train:17"
+    },
+    {
+      "name": "00010.safetensors",
+      "bytes": 117965768,
+      "sha256": "c1c20ebd0c32fe788a9063ddac6d5134c2ec27afcfae3ab287dcfa53be791dd4",
+      "sequence_id": "HuggingFaceFW/fineweb-edu:train:18"
+    },
+    {
+      "name": "00011.safetensors",
+      "bytes": 117965768,
+      "sha256": "d9f22f74f4334fdd151b6c4c502ca1a504c31ac8e0c996953d6964ffb481f690",
+      "sequence_id": "HuggingFaceFW/fineweb-edu:train:19"
+    },
+    {
+      "name": "00012.safetensors",
+      "bytes": 117965768,
+      "sha256": "c92de98b571000028b4ced2476f06632ce5c353c5311c5857ed884f4fcaeacf0",
+      "sequence_id": "HuggingFaceFW/fineweb-edu:train:20"
+    },
+    {
+      "name": "00013.safetensors",
+      "bytes": 117965768,
+      "sha256": "df4763bfe255cd1567704e5f060f13d3503d36c4052cd5c3c1f42ccf465be178",
+      "sequence_id": "HuggingFaceFW/fineweb-edu:train:22"
+    },
+    {
+      "name": "00014.safetensors",
+      "bytes": 117965768,
+      "sha256": "a73b284853406fd8ffffa456b96db533bb4cd512b39711a4123fd73cd6db96bb",
+      "sequence_id": "HuggingFaceFW/fineweb-edu:train:24"
+    },
+    {
+      "name": "00015.safetensors",
+      "bytes": 117965768,
+      "sha256": "25dc979d321e7879e68b7b0f2c504d5a87800a409c9845f21bcb33d8c4cf6776",
+      "sequence_id": "HuggingFaceFW/fineweb-edu:train:25"
+    }
+  ],
+  "environment": {
+    "python": "3.12.13",
+    "torch": "2.11.0+cu128",
+    "cuda_runtime": "12.8",
+    "cuda_device": "Tesla T4",
+    "model_dtype": "float16",
+    "attention_implementation": "sdpa",
+    "packages": {
+      "transformers": "4.57.6",
+      "datasets": "4.0.0",
+      "accelerate": "1.14.0",
+      "safetensors": "0.8.0",
+      "numpy": "2.0.2"
+    }
+  }
+}

@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Published hash-bound Tesla-T4 Qwen3 0.6B→1.7B T2 evidence, including all raw evaluation rows and deterministic confidence intervals; both preregistered quality gates rejected the pair.
+- Added a lightweight publication validator that verifies provenance and recomputes aggregates without pretending the omitted calibration shards or mapper weights were re-verified.
+- Added exact symmetric diagonal equilibration and CPU-FP64 recovery for ill-conditioned ridge solves, plus finite-statistic checks and regression tests.
+
 ## 0.2.0 - 2026-08-12
 
 - Added GPU-resident, memory-bounded ridge accumulation with deterministic token striding.

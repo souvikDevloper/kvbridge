@@ -11,6 +11,7 @@ from kvbridge.evidence import (
     sha256_file,
     validate_capture_evidence,
     validate_mapper_evidence,
+    validate_published_result_evidence,
     validate_result_evidence,
 )
 from kvbridge.io import (
@@ -278,6 +279,35 @@ def test_complete_evidence_chain_validates(tmp_path: Path) -> None:
     assert fit_report["stage"] == "fit"
     assert result_report["stage"] == "evaluation"
     assert result_report["all_quality_gates_passed"] is True
+
+
+def test_lightweight_published_evidence_recomputes_result_without_large_files(
+    tmp_path: Path,
+) -> None:
+    config_path, calibration_dir, artifact_dir, result_path = _complete_evidence(tmp_path)
+    published = tmp_path / "published"
+    published.mkdir()
+    (published / "capture_manifest.json").write_bytes(
+        (calibration_dir / "capture_manifest.json").read_bytes()
+    )
+    (published / "mapper_manifest.json").write_bytes(
+        (artifact_dir / "manifest.json").read_bytes()
+    )
+    (published / "fit_run.json").write_bytes((artifact_dir / "fit_run.json").read_bytes())
+    (published / "result.json").write_bytes(result_path.read_bytes())
+
+    report = validate_published_result_evidence(config_path, published)
+
+    assert report["stage"] == "published-evaluation"
+    assert report["all_quality_gates_passed"] is True
+    assert report["calibration_shards_verified"] is False
+    assert report["mapper_weights_verified"] is False
+
+    tampered = json.loads((published / "result.json").read_text(encoding="utf-8"))
+    tampered["summary"]["cache_r2_mean"] = -100.0
+    atomic_write_text(published / "result.json", json.dumps(tampered) + "\n")
+    with pytest.raises(ArtifactError, match="summary metric is inconsistent"):
+        validate_published_result_evidence(config_path, published)
 
 
 def test_mapper_evidence_recomputes_fit_summary(tmp_path: Path) -> None:

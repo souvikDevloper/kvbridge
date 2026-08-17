@@ -6,4 +6,5 @@ recursive-include scripts *.sh
 recursive-include experiments *.py
 include results/local_scale_results.json results/local_scale_results.csv
 include results/artifact_precision.json results/artifact_precision.csv
+recursive-include results/t2 *.json *.md
 prune results/wheel_demo_artifacts

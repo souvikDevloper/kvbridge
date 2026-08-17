@@ -39,6 +39,8 @@ No small-model result should be extrapolated numerically to Qwen3 14B→32B.
 
 Use the pinned 0.6B to 1.7B smoke configuration first, followed by 1.7B to 4B where memory permits. Record attention-output cosine, short-suffix logit KL, next-token agreement, target-prefill/transfer latency, peak VRAM, and every per-sequence value.
 
+The initial 16-sequence 0.6B→1.7B smoke executed on a Tesla T4 on 2026-08-17. Its attention minimum (0.2937) missed the 0.90 floor and its KL p95 (4.5903) exceeded the 0.20 ceiling; the pair/configuration is rejected. The 3.074× median per-case prefill/transfer ratio is retained as a systems observation only. A 50-200-sequence run is still required for a confirmatory T2 claim.
+
 ## T3: Qwen3 14B→32B reproduction
 
 Use `configs/qwen3_14b_to_32b.paper.json`: 500 FineWeb-Edu sequences, 1,024 tokens, stride 4, ridge λ=0.01, top-k=8, BF16 forward, FP32 covariance. Match the source/target model commits in the config or record an intentional revision update.

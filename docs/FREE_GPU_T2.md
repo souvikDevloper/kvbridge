@@ -2,6 +2,8 @@
 
 This runbook produces a real-model integration result for Qwen3 0.6B to 1.7B. It is a T2 systems/quality smoke test, not a reproduction of the paper's 14B to 32B result and not evidence about H100 performance.
 
+The 2026-08-17 Tesla-T4 execution is published under `results/t2/qwen3-0.6b-to-1.7b-smoke`. It completed the pipeline and failed both preregistered quality gates, so it is a reproducible negative result rather than a deployable pair.
+
 ## Provider choice
 
 Kaggle is the first target because its official notebook documentation provides free Tesla P100 access with a weekly quota that is commonly about 30 hours. A P100 does not provide native BF16 execution, so the pinned smoke config loads model weights in FP16 and decompresses the BF16 mapper artifact to resident FP32 tensors for mapping.
@@ -37,6 +39,14 @@ python experiments/validate_hf_evidence.py configs/qwen3_0.6b_to_1.7b.t2-smoke.j
   --calibration-dir data/calibration \
   --artifact-dir artifacts/qwen3-0.6b-to-1.7b \
   --result results/qwen3-0.6b-to-1.7b.t2.json
+```
+
+For the lightweight files checked into Git (without the 1.887 GB shards or mapper weights), run:
+
+```bash
+python experiments/validate_published_evidence.py \
+  configs/qwen3_0.6b_to_1.7b.t2-smoke.json \
+  results/t2/qwen3-0.6b-to-1.7b-smoke
 ```
 
 For a larger calibration study on the same free-GPU pair, set the three output paths and use `configs/qwen3_0.6b_to_1.7b.t2-capacity.json`. Keep smoke and capacity evidence in separate directories.

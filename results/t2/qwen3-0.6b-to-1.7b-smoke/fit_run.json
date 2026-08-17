@@ -1,0 +1,27 @@
+{
+  "artifact_storage_dtype": "bfloat16",
+  "calibration_bytes": 1887452288,
+  "calibration_data_passes": 21,
+  "calibration_shards": 16,
+  "capture_code_revision": "e69e13922f4a4e7d13110d4b3fd6c1056e1d15a4",
+  "capture_manifest_sha256": "d50af9e5d1ca68989c8121875f35cb247ec470a0f7650d3bd85d479e258115da",
+  "code_revision": "e69e13922f4a4e7d13110d4b3fd6c1056e1d15a4",
+  "config_sha256": "bbd8e280e805988de481d681a6b3d1aace9c1cee15ccec669f6b4a1566c86eca",
+  "elapsed_seconds": 128.67819435199988,
+  "environment": {
+    "cuda_device": "Tesla T4",
+    "cuda_peak_memory_bytes": 542900224,
+    "cuda_runtime": "12.8",
+    "packages": {
+      "numpy": "2.0.2",
+      "safetensors": "0.8.0"
+    },
+    "python": "3.12.13",
+    "torch": "2.11.0+cu128"
+  },
+  "estimated_calibration_bytes_read": 39636498048,
+  "evidence_tier": "T2",
+  "fit_key_r2_mean": 0.8882390430995396,
+  "fit_value_r2_mean": 0.8343175330332347,
+  "schema_version": 1
+}

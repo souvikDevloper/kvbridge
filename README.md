@@ -10,7 +10,7 @@ KVBridge is a production-oriented implementation and systems extension of NVIDIA
 
 The core algorithm is paper-faithful: target-layer-specific source selection, independent K/V ridge maps, cross-head features, and RoPE removal/reapplication. The systems work around it is original to this project: cancellation-resistant centered statistics, bounded-memory fitting, out-of-core SafeTensors shards, resource planning, revision/tokenizer gates, tamper-evident artifacts, guarded fallback, structured telemetry, a Hugging Face handoff adapter, and a reproducible validation suite.
 
-> **Evidence boundary:** the numerical core and failure paths are tested locally. The included Qwen3 plan reproduces the paper's mapper dimensions, but this machine has no CUDA device and did not run 14B/32B quality benchmarks. Full-model claims remain a partnership experiment, never a fabricated result.
+> **Evidence boundary:** T0-T1 pass locally. A real Tesla-T4 T2 run on Qwen3 0.6B→1.7B completed and **failed** both preregistered quality gates despite a measured mapping-speed advantage; its raw rows and hash-bound manifests are checked in. No 14B→32B quality or H100/H200 result is claimed. That remains a partner/high-memory experiment.
 
 ## What ships
 
@@ -74,6 +74,28 @@ The committed [local results](results/local_scale_results.json) were generated o
 | Medium | 8→6 layers, 4 heads × 16 dim, 256 tokens | 0.99999892 | Yes | 2.844 ms |
 
 These tests validate shape semantics, layer selection, ridge recovery, RoPE round trips, serialization, and scaling behavior. They do **not** estimate Qwen/Llama downstream accuracy or GPU speedup.
+
+## Real-model T2 evidence
+
+The checked-in [Qwen3 0.6B→1.7B T2 evidence](results/t2/qwen3-0.6b-to-1.7b-smoke/README.md) was executed on a free Tesla T4 at commit `e69e139`. It used 16×512-token FineWeb-Edu calibration sequences (2,048 stride-sampled observations), eight held-out 256-token sequences, FP16 models, CUDA FP32 accumulation, and a 58,777,600-parameter BF16 mapper.
+
+| Metric | Result | Preregistered gate |
+|---|---:|---:|
+| Cache R² mean | 0.2347 | diagnostic only |
+| Attention-output cosine mean / minimum | 0.6568 / 0.2937 | minimum ≥ 0.90 — **failed** |
+| One-token logit KL mean / p95 | 1.6145 / 4.5903 | p95 ≤ 0.20 — **failed** |
+| Next-token agreement | 25.0% | diagnostic only |
+| Transfer median / p95 | 46.09 / 54.23 ms | hardware-local |
+| Target prefix-prefill median | 87.29 ms | hardware-local |
+| Per-case prefill/transfer ratio median | 3.074× | speed only; not acceptance |
+
+This is a useful negative result: the bridge was faster on this setup, but the mapped state was not safe to serve. The runtime policy therefore requires full-prefill fallback for this pair/configuration. Recompute the lightweight publication record with:
+
+```bash
+python experiments/validate_published_evidence.py \
+  configs/qwen3_0.6b_to_1.7b.t2-smoke.json \
+  results/t2/qwen3-0.6b-to-1.7b-smoke
+```
 
 ## Fitting from out-of-core shards
 
@@ -143,11 +165,11 @@ Production rollout should progress through:
 |---|---|---|---|
 | T0 | Any CPU | Unit, corruption, fallback, artifact, planner tests | Passing |
 | T1 | Any CPU | Synthetic structural/scale sweep | Completed |
-| T2 | 1 capable GPU | Tiny/small same-family end-to-end integration | Configured next step |
+| T2 | 1 capable GPU | Tiny/small same-family end-to-end integration | Executed; 0.6B→1.7B gates rejected |
 | T3 | Multi-GPU lab | Qwen3 14B→32B paper reproduction | Partnership-ready config |
 | T4 | Multi-lab | Long-context, quantized, distribution-shift study | Proposed protocol |
 
-See [architecture](docs/ARCHITECTURE.md), [experiment protocol](docs/EXPERIMENT_PROTOCOL.md), [collaboration tracks](COLLABORATION.md), [threat model](docs/THREAT_MODEL.md), and [production checklist](docs/PRODUCTION_CHECKLIST.md).
+See [architecture](docs/ARCHITECTURE.md), [experiment protocol](docs/EXPERIMENT_PROTOCOL.md), [Lightning H100/H200 runbook](docs/LIGHTNING_GPU.md), [collaboration tracks](COLLABORATION.md), [threat model](docs/THREAT_MODEL.md), and [production checklist](docs/PRODUCTION_CHECKLIST.md).
 
 ### Free-GPU real-model path
 
@@ -161,7 +183,7 @@ bash scripts/kaggle_t2_smoke.sh
 
 The driver is stage-resumable by default. It reuses calibration, mapper, or evaluation output only after validating config/model provenance, SafeTensors structure, per-shard SHA-256 records, mapper checksums, finite standard-JSON metrics, and recomputed aggregates and bootstrap confidence intervals. Set `KVBRIDGE_RESUME=0` for a clean fail-closed run into empty paths.
 
-See the [free-GPU runbook](docs/FREE_GPU_T2.md). The repository does not call this successful until the raw result exists and its preregistered gates pass.
+See the [free-GPU runbook](docs/FREE_GPU_T2.md). The raw result exists, but the repository correctly records the run as rejected because its preregistered gates did not pass.
 
 ## Development
 

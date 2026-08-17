@@ -414,6 +414,131 @@ def _case_metric(case: dict[str, Any], name: str, index: int) -> float:
     return float(value)
 
 
+def _validate_result_payload(
+    raw_config: dict[str, Any], payload: dict[str, Any]
+) -> tuple[int, bool, bool]:
+    """Recompute all published aggregates, intervals, and gate outcomes."""
+    cases = payload.get("cases")
+    summary = payload.get("summary")
+    if not isinstance(cases, list) or not cases:
+        raise ArtifactError("evaluation result has no raw cases")
+    if not isinstance(summary, dict):
+        raise ArtifactError("evaluation result has no summary")
+    desired = int(raw_config["evaluation"]["sequences"])
+    _require(len(cases) == desired, "evaluation case count differs from the config")
+    _require(summary.get("sequences") == desired, "summary sequence count is inconsistent")
+
+    if not all(isinstance(case, dict) for case in cases):
+        raise ArtifactError("evaluation cases must contain JSON objects")
+    typed_cases = [case for case in cases if isinstance(case, dict)]
+    cache_r2 = [_case_metric(case, "cache_r2", index) for index, case in enumerate(typed_cases)]
+    attention = [
+        _case_metric(case, "attention_cosine_mean", index)
+        for index, case in enumerate(typed_cases)
+    ]
+    attention_min = [
+        _case_metric(case, "attention_cosine_min", index)
+        for index, case in enumerate(typed_cases)
+    ]
+    kl = [_case_metric(case, "logit_kl", index) for index, case in enumerate(typed_cases)]
+    transfer = [
+        _case_metric(case, "transfer_ms", index) for index, case in enumerate(typed_cases)
+    ]
+    target_prefill = [
+        _case_metric(case, "target_prefix_prefill_ms", index)
+        for index, case in enumerate(typed_cases)
+    ]
+    _require(all(value > 0 for value in transfer), "transfer latency must be positive")
+    _require(
+        all(value > 0 for value in target_prefill), "target-prefill latency must be positive"
+    )
+    for index, case in enumerate(typed_cases):
+        _require(
+            isinstance(case.get("next_token_agreement"), bool),
+            f"evaluation case {index} has invalid next-token agreement",
+        )
+        per_layer = case.get("attention_cosine_per_layer")
+        if per_layer is not None:
+            _require(
+                isinstance(per_layer, list)
+                and bool(per_layer)
+                and all(
+                    isinstance(value, int | float)
+                    and not isinstance(value, bool)
+                    and math.isfinite(float(value))
+                    for value in per_layer
+                ),
+                f"evaluation case {index} has invalid per-layer attention metrics",
+            )
+    expected = {
+        "cache_r2_mean": sum(cache_r2) / desired,
+        "attention_cosine_mean": sum(attention) / desired,
+        "attention_cosine_min": min(attention_min),
+        "logit_kl_mean": sum(kl) / desired,
+        "logit_kl_p95": _percentile(kl, 0.95),
+        "next_token_agreement": sum(
+            bool(case["next_token_agreement"]) for case in typed_cases
+        )
+        / desired,
+        "transfer_ms_median": _percentile(transfer, 0.50),
+        "transfer_ms_p95": _percentile(transfer, 0.95),
+        "target_prefix_prefill_ms_median": _percentile(target_prefill, 0.50),
+        "prefill_to_transfer_speed_ratio_median": _percentile(
+            [baseline / mapped for baseline, mapped in zip(target_prefill, transfer, strict=True)],
+            0.50,
+        ),
+    }
+    for name, value in expected.items():
+        _require(_close(summary.get(name), value), f"summary metric is inconsistent: {name}")
+
+    intervals = summary.get("confidence_intervals")
+    if intervals is not None:
+        if not isinstance(intervals, dict):
+            raise ArtifactError("confidence intervals must contain a JSON object")
+        interval_inputs = {
+            "cache_r2_mean": cache_r2,
+            "attention_cosine_mean": attention,
+            "logit_kl_mean": kl,
+            "next_token_agreement": [
+                float(bool(case["next_token_agreement"])) for case in typed_cases
+            ],
+        }
+        for name, values in interval_inputs.items():
+            record = intervals.get(name)
+            if not isinstance(record, dict):
+                raise ArtifactError(f"missing confidence interval: {name}")
+            try:
+                recomputed = bootstrap_mean_interval(
+                    values,
+                    confidence=float(record["confidence"]),
+                    resamples=int(record["resamples"]),
+                    seed=int(record["seed"]),
+                ).to_dict()
+            except (KeyError, TypeError, ValueError) as error:
+                raise ArtifactError(f"invalid confidence interval: {name}") from error
+            for field in ("low", "center", "high"):
+                _require(
+                    _close(record.get(field), float(recomputed[field])),
+                    f"confidence interval is inconsistent: {name}.{field}",
+                )
+
+    evaluation = raw_config["evaluation"]
+    attention_passed = expected["attention_cosine_min"] >= float(
+        evaluation["attention_cosine_floor"]
+    )
+    kl_passed = expected["logit_kl_p95"] <= float(evaluation["logit_kl_ceiling"])
+    _require(
+        summary.get("attention_gate_passed") is attention_passed,
+        "attention gate outcome is inconsistent",
+    )
+    _require(summary.get("logit_kl_gate_passed") is kl_passed, "KL gate outcome is inconsistent")
+    _require(
+        summary.get("all_quality_gates_passed") is (attention_passed and kl_passed),
+        "combined quality gate outcome is inconsistent",
+    )
+    return desired, attention_passed, kl_passed
+
+
 def validate_result_evidence(
     config_path: str | Path,
     calibration_dir: str | Path,
@@ -568,4 +693,162 @@ def validate_result_evidence(
         "result_sha256": sha256_file(result_file),
         "sequences": desired,
         "all_quality_gates_passed": attention_passed and kl_passed,
+    }
+
+
+def validate_published_result_evidence(
+    config_path: str | Path, evidence_dir: str | Path
+) -> dict[str, Any]:
+    """Validate a lightweight published result without large shards or weights.
+
+    This verifies the configuration/capture/fit/mapper/result hash chain and
+    recomputes every result aggregate, confidence interval, and quality gate.
+    It deliberately reports that calibration shard contents and mapper tensor
+    contents were not re-verified because those large files are not published
+    in the Git repository.
+    """
+    config_file = Path(config_path)
+    root = Path(evidence_dir)
+    config = ExperimentConfig.load(config_file)
+    raw_config = _load_json(config_file, "experiment config")
+    capture_path = root / "capture_manifest.json"
+    mapper_path = root / "mapper_manifest.json"
+    fit_path = root / "fit_run.json"
+    result_path = root / "result.json"
+    capture = _load_json(capture_path, "published capture manifest")
+    mapper = _load_json(mapper_path, "published mapper manifest")
+    fit = _load_json(fit_path, "published fit run")
+    result = _load_json(result_path, "published evaluation result")
+
+    config_digest = sha256_file(config_file)
+    capture_digest = sha256_file(capture_path)
+    mapper_digest = sha256_file(mapper_path)
+    _require(capture.get("schema_version") == 1, "unsupported capture manifest schema")
+    _require(mapper.get("schema_version") == 1, "unsupported mapper manifest schema")
+    _require(fit.get("schema_version") == 1, "unsupported fit run schema")
+    _require(result.get("schema_version") == 1, "unsupported evaluation result schema")
+    _require(
+        _same_digest(capture.get("config_sha256"), config_digest),
+        "published capture config hash differs from the requested config",
+    )
+    _require(
+        _same_digest(
+            capture.get("calibration_contract_sha256"),
+            calibration_contract_sha256(config_file),
+        ),
+        "published capture calibration contract differs from the requested config",
+    )
+    _require(
+        capture.get("sequences") == config.calibration_sequences
+        and capture.get("tokens") == config.calibration_tokens,
+        "published capture dimensions differ from the requested config",
+    )
+    _require(
+        isinstance(capture.get("code_revision"), str) and bool(capture["code_revision"]),
+        "published capture has no code revision",
+    )
+
+    source_signature = capture.get("source_signature")
+    target_signature = capture.get("target_signature")
+    if isinstance(source_signature, dict) and isinstance(target_signature, dict):
+        for side, recorded, requested in (
+            ("source", source_signature, raw_config["source"]),
+            ("target", target_signature, raw_config["target"]),
+        ):
+            for field in (
+                "model_id",
+                "revision",
+                "num_layers",
+                "num_kv_heads",
+                "head_dim",
+                "attention_kind",
+                "architecture",
+            ):
+                _require(
+                    recorded.get(field) == requested.get(field),
+                    f"published {side} signature differs from the config: {field}",
+                )
+        _require(
+            mapper.get("source_signature") == source_signature
+            and mapper.get("target_signature") == target_signature,
+            "published mapper signatures differ from the capture",
+        )
+    for side in ("source", "target"):
+        captured_fingerprint = capture.get(f"{side}_fingerprint")
+        if captured_fingerprint is not None:
+            _require(
+                mapper.get(f"{side}_fingerprint") == captured_fingerprint,
+                f"published mapper {side} fingerprint differs from the capture",
+            )
+    _require(mapper.get("fit_config") == config.fit.to_dict(), "published fit config differs")
+    _require(
+        mapper.get("storage_dtype") == fit.get("artifact_storage_dtype"),
+        "published artifact storage dtype is inconsistent",
+    )
+
+    _require(
+        _same_digest(fit.get("config_sha256"), config_digest),
+        "published fit config hash differs from the requested config",
+    )
+    _require(
+        _same_digest(fit.get("capture_manifest_sha256"), capture_digest),
+        "published fit capture hash differs from the capture manifest",
+    )
+    _require(
+        fit.get("capture_code_revision") == capture.get("code_revision"),
+        "published fit does not identify the capture code revision",
+    )
+    _require(
+        fit.get("calibration_shards") == config.calibration_sequences,
+        "published fit calibration shard count is inconsistent",
+    )
+    _require(
+        fit.get("calibration_data_passes") == build_scale_plan(config).calibration_data_passes,
+        "published fit calibration pass count is inconsistent",
+    )
+    key_r2 = mapper.get("fit_key_r2")
+    value_r2 = mapper.get("fit_value_r2")
+    for r2_name, r2_values, r2_recorded in (
+        ("key", key_r2, fit.get("fit_key_r2_mean")),
+        ("value", value_r2, fit.get("fit_value_r2_mean")),
+    ):
+        if not isinstance(r2_values, list) or not r2_values:
+            raise ArtifactError(f"published mapper {r2_name} R2 is invalid")
+        _require(
+            all(_finite_number(value) for value in r2_values),
+            f"published mapper {r2_name} R2 is invalid",
+        )
+        _require(
+            _close(
+                r2_recorded,
+                sum(float(value) for value in r2_values) / len(r2_values),
+            ),
+            f"published fit {r2_name} R2 is inconsistent",
+        )
+
+    _require(
+        _same_digest(result.get("config_sha256"), config_digest),
+        "published result config hash differs from the requested config",
+    )
+    _require(
+        _same_digest(result.get("artifact_manifest_sha256"), mapper_digest),
+        "published result mapper hash differs from the mapper manifest",
+    )
+    _require(
+        result.get("code_revision") == fit.get("code_revision"),
+        "published result code revision differs from the fit",
+    )
+    desired, attention_passed, kl_passed = _validate_result_payload(raw_config, result)
+    return {
+        "stage": "published-evaluation",
+        "config_sha256": config_digest,
+        "capture_manifest_sha256": capture_digest,
+        "mapper_manifest_sha256": mapper_digest,
+        "fit_run_sha256": sha256_file(fit_path),
+        "result_sha256": sha256_file(result_path),
+        "code_revision": fit["code_revision"],
+        "sequences": desired,
+        "all_quality_gates_passed": attention_passed and kl_passed,
+        "calibration_shards_verified": False,
+        "mapper_weights_verified": False,
     }

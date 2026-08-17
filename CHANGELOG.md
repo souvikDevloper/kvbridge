@@ -8,6 +8,7 @@
 - Add a sequential-residency PyTorch/XLA SPMD FSDPv2 runner for TPU v5e/v6e.
 - Support bare Hugging Face decoder models and FSDPv2-wrapped metadata access.
 - Use XLA-compatible no-grad capture instead of inference-tensor semantics.
+- Make FSDPv2 output sharding idempotent for torch_xla 2.8 tensor wrappers.
 - Add a sequential TPU held-out evaluator and tamper-evident evidence validator.
 - Add pinned 128K and 256K Qwen3 14B→32B TPU configs and a Kaggle/TRC runbook.
 - Expose total sampled-host-cache memory in the scale planner.

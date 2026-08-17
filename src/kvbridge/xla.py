@@ -80,6 +80,14 @@ def _cache_layers(cache: Any) -> list[tuple[Tensor, Tensor]]:
     return []
 
 
+def _is_xla_sharded_tensor(tensor: Tensor) -> bool:
+    tensor_type = type(tensor)
+    return (
+        tensor_type.__name__ == "XLAShardedTensor"
+        and tensor_type.__module__.startswith("torch_xla.")
+    )
+
+
 def wrap_model_for_fsdp(model: Any, context: XLAContext) -> Any:
     """Move a decoder-only model to XLA and shard parameters/activations."""
     try:
@@ -99,13 +107,20 @@ def wrap_model_for_fsdp(model: Any, context: XLAContext) -> Any:
         transformer_layer_cls={decoder_type},
     )
     def shard_output(output: Any, mesh: Any) -> None:
+        def mark(tensor: Tensor, partition_spec: tuple[str | None, ...]) -> None:
+            # torch_xla 2.8 may propagate XLAShardedTensor through the model.
+            # Re-marking that wrapper enters an incompatible unwrap path, while
+            # its existing sharding is already the desired batch partition.
+            if not _is_xla_sharded_tensor(tensor):
+                xs.mark_sharding(tensor, mesh, partition_spec)
+
         for name in ("last_hidden_state", "logits"):
             tensor = getattr(output, name, None)
             if isinstance(tensor, Tensor):
-                xs.mark_sharding(tensor, mesh, ("fsdp", None, None))
+                mark(tensor, ("fsdp", None, None))
         for key, value in _cache_layers(getattr(output, "past_key_values", None)):
-            xs.mark_sharding(key, mesh, ("fsdp", None, None, None))
-            xs.mark_sharding(value, mesh, ("fsdp", None, None, None))
+            mark(key, ("fsdp", None, None, None))
+            mark(value, ("fsdp", None, None, None))
 
     return FSDPv2(
         model,

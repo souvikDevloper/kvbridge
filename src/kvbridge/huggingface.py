@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, cast
 
@@ -27,7 +28,7 @@ class HFCapture:
 
     cache: KVCache
     queries: tuple[Tensor, ...]
-    logits: Tensor
+    logits: Tensor | None
 
 
 def tokenizer_fingerprint(tokenizer: Any) -> str:
@@ -155,7 +156,11 @@ def capture_cache(
 
 @torch.inference_mode()
 def capture_cache_with_queries(
-    model: Any, input_ids: Tensor, *, attention_mask: Tensor | None = None
+    model: Any,
+    input_ids: Tensor,
+    *,
+    attention_mask: Tensor | None = None,
+    retain_logits: bool = True,
 ) -> HFCapture:
     """Capture target K/V, RoPE-applied Q, and logits in one reference prefill.
 
@@ -210,7 +215,11 @@ def capture_cache_with_queries(
     queries = tuple(rotary.apply(query) for query in raw_queries if query is not None)
     layers = _legacy_layers(outputs.past_key_values)
     cache = KVCache([layer[0] for layer in layers], [layer[1] for layer in layers], rotary)
-    return HFCapture(cache=cache, queries=queries, logits=outputs.logits)
+    return HFCapture(
+        cache=cache,
+        queries=queries,
+        logits=outputs.logits if retain_logits else None,
+    )
 
 
 def to_dynamic_cache(cache: KVCache, model: Any) -> Any:
@@ -228,13 +237,20 @@ def to_dynamic_cache(cache: KVCache, model: Any) -> Any:
 
 
 @torch.inference_mode()
-def suffix_logits_from_cache(model: Any, cache: KVCache, suffix_input_ids: Tensor) -> Tensor:
+def suffix_logits_from_cache(
+    model: Any,
+    cache: KVCache,
+    suffix_input_ids: Tensor,
+    *,
+    batch_sharder: Callable[[Tensor], Tensor] | None = None,
+) -> Tensor:
     """Consume a short suffix against an existing cache and return its logits."""
     if suffix_input_ids.ndim != 2 or suffix_input_ids.shape[1] < 1:
         raise ValueError("suffix_input_ids must be rank-2 with at least one token")
     device = model.get_input_embeddings().weight.device
     suffix_input_ids = suffix_input_ids.to(device)
-    cache = cache.to(device)
+    if cache.keys[0].device != device:
+        cache = cache.to(device)
     past = to_dynamic_cache(cache, model)
     batch, suffix_tokens = suffix_input_ids.shape
     prefix_tokens = cache.shape[3]
@@ -247,6 +263,10 @@ def suffix_logits_from_cache(model: Any, cache: KVCache, suffix_input_ids: Tenso
     cache_position = torch.arange(
         prefix_tokens, prefix_tokens + suffix_tokens, device=device
     )
+    if batch_sharder is not None:
+        suffix_input_ids = batch_sharder(suffix_input_ids)
+        attention_mask = batch_sharder(attention_mask)
+        position_ids = batch_sharder(position_ids)
     kwargs = {
         "input_ids": suffix_input_ids,
         "attention_mask": attention_mask,

@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Add an exact vectorized layer-selection accumulator with covariance sharing.
+- Add contract-bound, atomic selection-block and target-layer fit checkpoints.
+- Add pre-sampled calibration-pair support to avoid double-striding TPU caches.
+- Add a sequential-residency PyTorch/XLA SPMD FSDPv2 runner for TPU v3/v6e.
+- Add a sequential TPU held-out evaluator and tamper-evident evidence validator.
+- Add pinned 128K and 256K Qwen3 14B→32B TPU configs and a Kaggle/TRC runbook.
+- Expose total sampled-host-cache memory in the scale planner.
+
+## Unreleased
+
 - Published hash-bound Tesla-T4 Qwen3 0.6B→1.7B T2 evidence, including all raw evaluation rows and deterministic confidence intervals; both preregistered quality gates rejected the pair.
 - Added a lightweight publication validator that verifies provenance and recomputes aggregates without pretending the omitted calibration shards or mapper weights were re-verified.
 - Added exact symmetric diagonal equilibration and CPU-FP64 recovery for ill-conditioned ridge solves, plus finite-statistic checks and regression tests.

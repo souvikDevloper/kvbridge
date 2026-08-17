@@ -1,5 +1,6 @@
 {
-  "name": "qwen3-14b-to-32b-paper-reproduction",
+  "name": "qwen3-14b-to-32b-tpu-128k",
+  "evidence_tier": "T3",
   "source": {
     "model_id": "Qwen/Qwen3-14B",
     "revision": "40c069824f4251a91eefaf281ebe4c544efd3e18",
@@ -26,6 +27,7 @@
     "content_space": true,
     "selection_alpha": 1e-06,
     "accumulation_dtype": "float32",
+    "accumulation_device": "xla",
     "require_matched_kv": true,
     "target_layer_block_size": 1,
     "selection_target_layer_block_size": 8
@@ -48,7 +50,13 @@
   },
   "model_dtype": "bfloat16",
   "attention_implementation": "eager",
-  "artifact_storage_dtype": "float32",
+  "artifact_storage_dtype": "bfloat16",
   "cache_dtype_bytes": 2,
-  "artifact_dtype_bytes": 4
+  "artifact_dtype_bytes": 2,
+  "accelerator": {
+    "runtime": "pytorch-xla-spmd",
+    "minimum_devices": 8,
+    "kaggle_preflight": "tpu-v3-8",
+    "full_run_recommended": "tpu-v6e-8"
+  }
 }

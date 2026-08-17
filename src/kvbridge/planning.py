@@ -53,6 +53,7 @@ class ScalePlan:
     fit_block_working_set_gib: float
     selection_block_working_set_gib: float
     calibration_cache_pair_gib: float
+    sampled_host_cache_gib: float
     calibration_data_passes: int
     estimated_mapper_load_ms_pcie25: float
     estimated_mapper_load_ms_pcie50: float
@@ -94,24 +95,41 @@ def build_scale_plan(config: ExperimentConfig) -> ScalePlan:
         )
         * accumulator_bytes
     )
-    selection_items = (
+    selection_block = min(
+        config.fit.selection_target_layer_block_size, config.target.num_layers
+    )
+    # Vectorized K/V selection shares source XTX and means across the entire
+    # target-layer block instead of duplicating them for every target layer.
+    selection_items = 2 * (
         config.source.num_layers
         * config.target.num_kv_heads
-        * 2
-        * (
-            config.source.head_dim**2
-            + config.source.head_dim * config.target.head_dim
-            + config.source.head_dim
-            + config.target.head_dim
-            + 1
-        )
-        * accumulator_bytes
-    )
+        * (config.source.head_dim**2 + config.source.head_dim)
+        + selection_block
+        * config.source.num_layers
+        * config.target.num_kv_heads
+        * config.source.head_dim
+        * config.target.head_dim
+        + selection_block
+        * config.target.num_kv_heads
+        * (config.target.head_dim + 1)
+    ) * accumulator_bytes
     source_cache = _cache_bytes(
         config.source, 1, config.calibration_tokens, config.cache_dtype_bytes
     )
     target_cache = _cache_bytes(
         config.target, 1, config.calibration_tokens, config.cache_dtype_bytes
+    )
+    sampled_tokens = math.ceil(config.calibration_tokens / config.token_stride)
+    sampled_host_cache = _cache_bytes(
+        config.source,
+        config.calibration_sequences,
+        sampled_tokens,
+        config.cache_dtype_bytes,
+    ) + _cache_bytes(
+        config.target,
+        config.calibration_sequences,
+        sampled_tokens,
+        config.cache_dtype_bytes,
     )
     mapper_bytes = mapper_parameters * config.artifact_dtype_bytes
     selection_passes = math.ceil(
@@ -126,9 +144,10 @@ def build_scale_plan(config: ExperimentConfig) -> ScalePlan:
         mapper_gib=mapper_bytes / GIB,
         fit_block_working_set_gib=(per_fit_layer * config.fit.target_layer_block_size / GIB),
         selection_block_working_set_gib=(
-            selection_items * config.fit.selection_target_layer_block_size / GIB
+            selection_items / GIB
         ),
         calibration_cache_pair_gib=(source_cache + target_cache) / GIB,
+        sampled_host_cache_gib=sampled_host_cache / GIB,
         calibration_data_passes=selection_passes + fit_passes,
         estimated_mapper_load_ms_pcie25=mapper_bytes / 25e9 * 1000,
         estimated_mapper_load_ms_pcie50=mapper_bytes / 50e9 * 1000,

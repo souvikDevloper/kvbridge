@@ -43,11 +43,22 @@ The initial 16-sequence 0.6B→1.7B smoke executed on a Tesla T4 on 2026-08-17. 
 
 ## T3: Qwen3 14B→32B reproduction
 
-Use `configs/qwen3_14b_to_32b.paper.json`: 500 FineWeb-Edu sequences, 1,024 tokens, stride 4, ridge λ=0.01, top-k=8, BF16 forward, FP32 covariance. Match the source/target model commits in the config or record an intentional revision update.
+Use `configs/qwen3_14b_to_32b.paper.json` on CUDA or
+`configs/qwen3_14b_to_32b.tpu-128k.json` on XLA: 500 FineWeb-Edu sequences,
+1,024 tokens, stride 4, ridge λ=0.01, top-k=8, BF16 forward, FP32 covariance.
+The exploratory `tpu-256k` config changes only the calibration sample count and
+must be reported as an ablation, not silently merged into the reproduction.
+Match the source/target model commits in the config or record an intentional
+revision update.
 
 Evaluate target standalone and transfer on ARC-Challenge, HellaSwag, WinoGrande, MMLU 5-shot, GSM8K 8-shot chain-of-thought, prefix-conditioned WikiText-2 perplexity, and CoQA multi-turn handoff. Report raw accuracy, simple retention, and floor-normalized retention. Never choose k on a benchmark later presented as held out.
 
 Latency uses 50 warmups and 30 timed trials for each context length from 64 to 32,768 tokens. Record cache movement and mapper execution together; target re-prefill excludes the LM head to match the source paper.
+
+Report latency separately for every accelerator generation. TPU v3/v6e results
+are valid hardware-local systems evidence but are not substitutes for an H100
+or H200 latency claim. See `docs/TPU_SCALE.md` for the sequential-residency and
+checkpoint protocol.
 
 ## T4: new investigations
 

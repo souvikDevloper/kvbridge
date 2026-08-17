@@ -87,8 +87,8 @@ class FitConfig:
             raise ValueError("ridge penalties cannot be negative")
         if self.accumulation_dtype not in {"float32", "float64"}:
             raise ValueError("accumulation_dtype must be float32 or float64")
-        if self.accumulation_device not in {"cpu", "cuda"}:
-            raise ValueError("accumulation_device must be cpu or cuda")
+        if self.accumulation_device not in {"cpu", "cuda", "xla"}:
+            raise ValueError("accumulation_device must be cpu, cuda, or xla")
         if self.target_layer_block_size <= 0:
             raise ValueError("target_layer_block_size must be positive")
         if self.selection_target_layer_block_size <= 0:

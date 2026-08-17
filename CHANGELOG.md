@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+- Add an exact vectorized layer-selection accumulator with covariance sharing.
+- Add contract-bound, atomic selection-block and target-layer fit checkpoints.
+- Add pre-sampled calibration-pair support to avoid double-striding TPU caches.
+- Add a sequential-residency PyTorch/XLA FSDP-style SPMD runner for TPU v5e/v6e.
+- Support bare Hugging Face decoder models and distributed-wrapper metadata access.
+- Use XLA-compatible no-grad capture instead of inference-tensor semantics.
+- Use direct largest-axis SPMD parameter sharding to avoid the unstable
+  torch_xla 2.8 experimental FSDPv2 inference wrapper.
+- Preserve fixed accelerator output shapes for padded tail batches by trimming
+  them only after host transfer, avoiding redundant large-model XLA compiles.
+- Document the observed Kaggle TPU draft-session failure boundary and the
+  revision-pinned background-run mitigation without attributing an unproven
+  provider-side root cause.
+- Add a sequential TPU held-out evaluator and tamper-evident evidence validator.
+- Add pinned 128K and 256K Qwen3 14B→32B TPU configs and a Kaggle/TRC runbook.
+- Expose total sampled-host-cache memory in the scale planner.
 - Published hash-bound Tesla-T4 Qwen3 0.6B→1.7B T2 evidence, including all raw evaluation rows and deterministic confidence intervals; both preregistered quality gates rejected the pair.
 - Added a lightweight publication validator that verifies provenance and recomputes aggregates without pretending the omitted calibration shards or mapper weights were re-verified.
 - Added exact symmetric diagonal equilibration and CPU-FP64 recovery for ill-conditioned ridge solves, plus finite-statistic checks and regression tests.

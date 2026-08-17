@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, cast
 
@@ -27,7 +28,22 @@ class HFCapture:
 
     cache: KVCache
     queries: tuple[Tensor, ...]
-    logits: Tensor
+    logits: Tensor | None
+
+
+def _metadata_model(model: Any) -> Any:
+    """Return the underlying HF model used for configuration and layer access.
+
+    Some distributed wrappers keep the wrapped module in ``_orig_module`` and
+    do not proxy Hugging Face helpers such as ``get_input_embeddings``. Forward
+    calls must still use the wrapper, while metadata and hooks target the
+    original module.
+    """
+    seen: set[int] = set()
+    while hasattr(model, "_orig_module") and id(model) not in seen:
+        seen.add(id(model))
+        model = model._orig_module
+    return model
 
 
 def tokenizer_fingerprint(tokenizer: Any) -> str:
@@ -66,7 +82,9 @@ def model_signature(
 
 
 def _rotary_module(model: Any) -> Any:
+    model = _metadata_model(model)
     candidates = [
+        getattr(model, "rotary_emb", None),
         getattr(getattr(model, "model", None), "rotary_emb", None),
         getattr(getattr(getattr(model, "model", None), "model", None), "rotary_emb", None),
     ]
@@ -76,11 +94,12 @@ def _rotary_module(model: Any) -> Any:
     raise CompatibilityError("model does not expose a supported model-level rotary embedding")
 
 
-@torch.inference_mode()
+@torch.no_grad()
 def capture_rotary_factors(model: Any, position_ids: Tensor) -> RotaryFactors:
-    rotary = _rotary_module(model)
-    device = model.get_input_embeddings().weight.device
-    dtype = model.get_input_embeddings().weight.dtype
+    metadata_model = _metadata_model(model)
+    rotary = _rotary_module(metadata_model)
+    device = metadata_model.get_input_embeddings().weight.device
+    dtype = metadata_model.get_input_embeddings().weight.dtype
     positions = position_ids.to(device)
     dummy = torch.empty((*positions.shape, 1), device=device, dtype=dtype)
     output = rotary(dummy, positions)
@@ -100,7 +119,9 @@ def _legacy_layers(cache: Any) -> list[tuple[Tensor, Tensor]]:
 
 
 def _decoder_layers(model: Any) -> Any:
+    model = _metadata_model(model)
     candidates = [
+        getattr(model, "layers", None),
         getattr(getattr(model, "model", None), "layers", None),
         getattr(getattr(getattr(model, "model", None), "model", None), "layers", None),
     ]
@@ -127,12 +148,13 @@ def _canonical_query(output: Any, *, query_heads: int, head_dim: int) -> Tensor:
     raise CompatibilityError(f"unsupported query tensor shape: {tuple(output.shape)}")
 
 
-@torch.inference_mode()
+@torch.no_grad()
 def capture_cache(
     model: Any, input_ids: Tensor, *, attention_mask: Tensor | None = None
 ) -> KVCache:
     """Run prefill and capture rotated K/V plus exact model-produced RoPE factors."""
-    device = model.get_input_embeddings().weight.device
+    metadata_model = _metadata_model(model)
+    device = metadata_model.get_input_embeddings().weight.device
     input_ids = input_ids.to(device)
     batch, tokens = input_ids.shape
     if attention_mask is None:
@@ -153,16 +175,21 @@ def capture_cache(
     return KVCache([layer[0] for layer in layers], [layer[1] for layer in layers], rotary)
 
 
-@torch.inference_mode()
+@torch.no_grad()
 def capture_cache_with_queries(
-    model: Any, input_ids: Tensor, *, attention_mask: Tensor | None = None
+    model: Any,
+    input_ids: Tensor,
+    *,
+    attention_mask: Tensor | None = None,
+    retain_logits: bool = True,
 ) -> HFCapture:
     """Capture target K/V, RoPE-applied Q, and logits in one reference prefill.
 
     Qwen3 exposes per-head query normalization, so the hook is placed after
     ``q_norm``. Llama-style models without that module fall back to ``q_proj``.
     """
-    device = model.get_input_embeddings().weight.device
+    metadata_model = _metadata_model(model)
+    device = metadata_model.get_input_embeddings().weight.device
     input_ids = input_ids.to(device)
     batch, tokens = input_ids.shape
     if attention_mask is None:
@@ -171,11 +198,17 @@ def capture_cache_with_queries(
         attention_mask = attention_mask.to(device)
     position_ids = attention_mask.long().cumsum(-1) - 1
     position_ids.masked_fill_(attention_mask == 0, 0)
-    query_heads = int(model.config.num_attention_heads)
+    query_heads = int(metadata_model.config.num_attention_heads)
     head_dim = int(
-        getattr(model.config, "head_dim", model.config.hidden_size // query_heads)
+        getattr(
+            metadata_model.config,
+            "head_dim",
+            metadata_model.config.hidden_size // query_heads,
+        )
     )
-    raw_queries: list[Tensor | None] = [None] * int(model.config.num_hidden_layers)
+    raw_queries: list[Tensor | None] = [None] * int(
+        metadata_model.config.num_hidden_layers
+    )
     handles = []
     for layer_index, layer in enumerate(_decoder_layers(model)):
         attention = layer.self_attn
@@ -210,7 +243,11 @@ def capture_cache_with_queries(
     queries = tuple(rotary.apply(query) for query in raw_queries if query is not None)
     layers = _legacy_layers(outputs.past_key_values)
     cache = KVCache([layer[0] for layer in layers], [layer[1] for layer in layers], rotary)
-    return HFCapture(cache=cache, queries=queries, logits=outputs.logits)
+    return HFCapture(
+        cache=cache,
+        queries=queries,
+        logits=outputs.logits if retain_logits else None,
+    )
 
 
 def to_dynamic_cache(cache: KVCache, model: Any) -> Any:
@@ -218,8 +255,9 @@ def to_dynamic_cache(cache: KVCache, model: Any) -> Any:
         from transformers import DynamicCache  # type: ignore[import-not-found, unused-ignore]
     except ImportError as error:  # pragma: no cover - exercised in HF integration environment
         raise RuntimeError("install kvbridge[hf] to use the Hugging Face adapter") from error
+    metadata_model = _metadata_model(model)
     try:
-        dynamic = DynamicCache(config=model.config)
+        dynamic = DynamicCache(config=metadata_model.config)
     except TypeError:
         dynamic = DynamicCache()
     for layer, (key, value) in enumerate(zip(cache.keys, cache.values, strict=True)):
@@ -227,14 +265,22 @@ def to_dynamic_cache(cache: KVCache, model: Any) -> Any:
     return dynamic
 
 
-@torch.inference_mode()
-def suffix_logits_from_cache(model: Any, cache: KVCache, suffix_input_ids: Tensor) -> Tensor:
+@torch.no_grad()
+def suffix_logits_from_cache(
+    model: Any,
+    cache: KVCache,
+    suffix_input_ids: Tensor,
+    *,
+    batch_sharder: Callable[[Tensor], Tensor] | None = None,
+) -> Tensor:
     """Consume a short suffix against an existing cache and return its logits."""
     if suffix_input_ids.ndim != 2 or suffix_input_ids.shape[1] < 1:
         raise ValueError("suffix_input_ids must be rank-2 with at least one token")
-    device = model.get_input_embeddings().weight.device
+    metadata_model = _metadata_model(model)
+    device = metadata_model.get_input_embeddings().weight.device
     suffix_input_ids = suffix_input_ids.to(device)
-    cache = cache.to(device)
+    if cache.keys[0].device != device:
+        cache = cache.to(device)
     past = to_dynamic_cache(cache, model)
     batch, suffix_tokens = suffix_input_ids.shape
     prefix_tokens = cache.shape[3]
@@ -247,6 +293,10 @@ def suffix_logits_from_cache(model: Any, cache: KVCache, suffix_input_ids: Tenso
     cache_position = torch.arange(
         prefix_tokens, prefix_tokens + suffix_tokens, device=device
     )
+    if batch_sharder is not None:
+        suffix_input_ids = batch_sharder(suffix_input_ids)
+        attention_mask = batch_sharder(attention_mask)
+        position_ids = batch_sharder(position_ids)
     kwargs = {
         "input_ids": suffix_input_ids,
         "attention_mask": attention_mask,
@@ -262,7 +312,7 @@ def suffix_logits_from_cache(model: Any, cache: KVCache, suffix_input_ids: Tenso
     return cast(Tensor, outputs.logits)
 
 
-@torch.inference_mode()
+@torch.no_grad()
 def greedy_handoff_generate(
     *,
     source_model: Any,
@@ -283,7 +333,8 @@ def greedy_handoff_generate(
         raise ValueError("max_new_tokens must be positive")
     source_prefix = input_ids[:, :-1]
     source_cache = capture_cache(source_model, source_prefix)
-    target_device = target_model.get_input_embeddings().weight.device
+    target_metadata_model = _metadata_model(target_model)
+    target_device = target_metadata_model.get_input_embeddings().weight.device
     batch, prefix_tokens = source_prefix.shape
     target_positions = (
         torch.arange(prefix_tokens, device=target_device).unsqueeze(0).expand(batch, -1)

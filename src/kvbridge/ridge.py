@@ -36,10 +36,17 @@ class RidgeAccumulator:
         if x_features <= 0 or y_features <= 0:
             raise ValueError("feature dimensions must be positive")
         resolved_device = torch.device(device)
-        if resolved_device.type not in {"cpu", "cuda"}:
-            raise ValueError("ridge accumulation device must be cpu or cuda")
+        if resolved_device.type not in {"cpu", "cuda", "xla"}:
+            raise ValueError("ridge accumulation device must be cpu, cuda, or xla")
         if resolved_device.type == "cuda" and not torch.cuda.is_available():
             raise RuntimeError("CUDA ridge accumulation requested but CUDA is unavailable")
+        if resolved_device.type == "xla":
+            try:
+                import torch_xla  # type: ignore[import-not-found, unused-ignore]  # noqa: F401
+            except ImportError as error:
+                raise RuntimeError(
+                    "XLA ridge accumulation requested but torch_xla is unavailable"
+                ) from error
         self.x_features = x_features
         self.y_features = y_features
         self.dtype = dtype

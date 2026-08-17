@@ -19,8 +19,9 @@ The core algorithm is paper-faithful: target-layer-specific source selection, in
 | Paper mapper | Per-target-layer, per-target-head ridge maps for K and V |
 | Layer selection | Head-averaged single-source R², then top-k cross-layer features |
 | Position handling | Exact inverse/forward RoPE using factors emitted by each model |
-| Modest-host fitting | Target-layer blocks, deterministic token stride, CPU/CUDA statistics |
+| Scale fitting | Vectorized centered statistics on CPU/CUDA/XLA; target-layer blocks |
 | Distributed path | Mergeable sufficient statistics plus `torch.distributed` all-reduce |
+| TPU path | Sequential model residency, PyTorch/XLA FSDP-style SPMD parameter sharding, restartable layer checkpoints |
 | Data plane | SafeTensors calibration shards; no pickle deserialization |
 | Artifact plane | Atomic writes, SHA-256, model fingerprints, measured FP32/BF16 storage |
 | Runtime safety | Shape/architecture/numerical/latency/logit-KL gates, explicit fallback |
@@ -126,6 +127,10 @@ The factory is re-iterable because memory-bounded fitting makes several determin
 
 For GPU fitting, set `accumulation_device="cuda"`. Artifact compression and runtime compute precision are separate: a BF16 artifact can be loaded once with `mapper.to("cuda", dtype=torch.float32)` on hardware without native BF16 execution. The serving hot path then reuses resident weights instead of transferring them per request.
 
+Long fits may pass `checkpoint_dir=` to `fit_mapper`. Selection blocks are
+written as validated JSON and completed target layers as SafeTensors; resume is
+bound to the exact source signature, target signature, and fit configuration.
+
 ## Live Hugging Face handoff
 
 ```python
@@ -170,6 +175,24 @@ Production rollout should progress through:
 | T4 | Multi-lab | Long-context, quantized, distribution-shift study | Proposed protocol |
 
 See [architecture](docs/ARCHITECTURE.md), [experiment protocol](docs/EXPERIMENT_PROTOCOL.md), [Lightning H100/H200 runbook](docs/LIGHTNING_GPU.md), [collaboration tracks](COLLABORATION.md), [threat model](docs/THREAT_MODEL.md), and [production checklist](docs/PRODUCTION_CHECKLIST.md).
+
+### TPU v5e/v6e paper-scale path
+
+The pinned TPU configs define the paper-aligned 128K observation run and an
+exploratory 256K ablation. Both use one portable PyTorch/XLA SPMD pipeline;
+Kaggle v5e-8 is the free validation lane and a TRC v6e-8 allocation is the
+recommended full-run lane.
+
+```bash
+python experiments/run_tpu_scale.py configs/qwen3_14b_to_32b.tpu-128k.json
+bash scripts/tpu_scale.sh
+```
+
+The runner never co-resides the 14B and 32B models, samples caches before host
+transfer, and checkpoints each completed fit layer. The driver then runs a
+sequential held-out TPU evaluator and validates all hashes and recomputed
+quality gates without reloading either model. Downstream benchmark status stays
+explicit. See the [TPU scale runbook](docs/TPU_SCALE.md).
 
 ### Free-GPU real-model path
 

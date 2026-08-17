@@ -156,8 +156,10 @@ def fit_demo(problem: SyntheticProblem) -> CrossModelKVMapper:
 
 
 def cache_r2(predicted: KVCache, expected: KVCache) -> float:
-    pred = torch.cat([*predicted.keys, *predicted.values]).double().flatten()
-    truth = torch.cat([*expected.keys, *expected.values]).double().flatten()
+    device = predicted.keys[0].device
+    dtype = torch.float64 if device.type == "cpu" else torch.float32
+    pred = torch.cat([*predicted.keys, *predicted.values]).to(dtype).flatten()
+    truth = torch.cat([*expected.keys, *expected.values]).to(dtype).flatten()
     residual = ((truth - pred) ** 2).sum()
     total = ((truth - truth.mean()) ** 2).sum()
     return float((1 - residual / total).item())

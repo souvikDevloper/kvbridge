@@ -74,6 +74,7 @@ def save_calibration_shard(
         "target_interleaved": str(
             pair.target.rotary.interleaved if pair.target.rotary else False
         ).lower(),
+        "sampled_stride": str(pair.sampled_stride),
     }
     temporary = destination.with_name(f".{destination.name}.{uuid4().hex}.tmp")
     try:
@@ -121,7 +122,13 @@ def load_calibration_shard(path: str | Path) -> CalibrationPair:
             _bool(metadata.get(f"{prefix}_keys_are_content")),
         )
 
-    return CalibrationPair(build("source"), build("target"))
+    try:
+        sampled_stride = int(metadata.get("sampled_stride", "1"))
+    except ValueError as error:
+        raise ArtifactError(
+            f"calibration shard has an invalid sampled stride: {source_path}"
+        ) from error
+    return CalibrationPair(build("source"), build("target"), sampled_stride)
 
 
 def calibration_shard_factory(

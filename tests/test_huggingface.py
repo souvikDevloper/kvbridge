@@ -1,6 +1,14 @@
+from types import SimpleNamespace
+
 import torch
 
-from kvbridge.huggingface import _canonical_query, tokenizer_fingerprint
+from kvbridge.huggingface import (
+    _canonical_query,
+    _decoder_layers,
+    _metadata_model,
+    _rotary_module,
+    tokenizer_fingerprint,
+)
 
 
 class FakeTokenizer:
@@ -28,3 +36,14 @@ def test_canonical_query_handles_normalized_and_projected_layouts() -> None:
     torch.testing.assert_close(
         _canonical_query(projected, query_heads=4, head_dim=8), expected
     )
+
+
+def test_bare_and_fsdp_wrapped_hf_model_metadata_is_discovered() -> None:
+    layers = [object(), object()]
+    rotary = object()
+    bare = SimpleNamespace(layers=layers, rotary_emb=rotary)
+    wrapped = SimpleNamespace(_orig_module=bare)
+
+    assert _metadata_model(wrapped) is bare
+    assert _decoder_layers(wrapped) is layers
+    assert _rotary_module(wrapped) is rotary

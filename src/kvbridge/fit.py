@@ -4,14 +4,17 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Iterator, Sequence
 from dataclasses import dataclass
+from pathlib import Path
 
 import torch
 
 from kvbridge.cache import KVCache
+from kvbridge.checkpoints import FitCheckpointStore, LayerCheckpoint
 from kvbridge.config import FitConfig, ModelSignature
-from kvbridge.features import flatten_head_tokens, flatten_tokens, selected_layer_features
+from kvbridge.features import flatten_tokens, selected_layer_features
 from kvbridge.mapper import CrossModelKVMapper
 from kvbridge.ridge import RidgeAccumulator
+from kvbridge.selection import BatchedSelectionAccumulator
 
 
 @dataclass(frozen=True, slots=True)
@@ -20,6 +23,11 @@ class CalibrationPair:
 
     source: KVCache
     target: KVCache
+    sampled_stride: int = 1
+
+    def __post_init__(self) -> None:
+        if self.sampled_stride <= 0:
+            raise ValueError("calibration pair sampled_stride must be positive")
 
 
 CalibrationSource = Sequence[CalibrationPair] | Callable[[], Iterable[CalibrationPair]]
@@ -54,15 +62,45 @@ def _validate_example(
         raise ValueError(f"calibration pair {index} does not align batch/token axes")
 
 
-def _prepare_pair(
-    pair: CalibrationPair, config: FitConfig, device: torch.device
-) -> CalibrationPair:
-    pair = CalibrationPair(pair.source.to(device), pair.target.to(device))
+def _prepare_pair(pair: CalibrationPair, config: FitConfig) -> CalibrationPair:
+    """Normalize a pair while keeping the full cache on its storage device.
+
+    Accumulators copy only the source/target slices needed for their current
+    block.  This matters at paper scale: moving an entire 14B/32B cache pair to
+    the fitting device for every target layer would dominate both HBM and I/O.
+    Accelerator capture jobs should strip RoPE before moving sampled caches to
+    host memory, so this fallback conversion is normally a no-op there.
+    """
     if config.content_space:
-        pair = CalibrationPair(pair.source.to_content_space(), pair.target.to_content_space())
+        source = (
+            pair.source
+            if pair.source.keys_are_content
+            else pair.source.to_content_space()
+        )
+        target = (
+            pair.target
+            if pair.target.keys_are_content
+            else pair.target.to_content_space()
+        )
+        pair = CalibrationPair(source, target, pair.sampled_stride)
+    if config.token_stride % pair.sampled_stride:
+        raise ValueError("pre-sampled calibration stride does not divide the configured stride")
+    remaining_stride = config.token_stride // pair.sampled_stride
     return CalibrationPair(
-        pair.source.sample_tokens(config.token_stride),
-        pair.target.sample_tokens(config.token_stride),
+        pair.source.sample_tokens(remaining_stride),
+        pair.target.sample_tokens(remaining_stride),
+        config.token_stride,
+    )
+
+
+def _stack_selection_layers(layers: Sequence[torch.Tensor]) -> torch.Tensor:
+    """Convert cache layers to ``[layer, head, observation, dim]``."""
+    stacked = torch.stack(list(layers), dim=0)
+    layer_count, batch, heads, tokens, dimension = stacked.shape
+    return (
+        stacked.permute(0, 2, 1, 3, 4)
+        .reshape(layer_count, heads, batch * tokens, dimension)
+        .contiguous()
     )
 
 
@@ -73,53 +111,75 @@ def _select_layers(
     config: FitConfig,
     dtype: torch.dtype,
     device: torch.device,
+    checkpoints: FitCheckpointStore | None = None,
 ) -> tuple[list[list[int]], list[list[float]]]:
     """Select source layers by key/value, head-averaged single-source R²."""
     selected: list[list[int]] = [[] for _ in range(target.num_layers)]
     all_scores: list[list[float]] = [[] for _ in range(target.num_layers)]
     block_size = config.selection_target_layer_block_size
     for block_start in range(0, target.num_layers, block_size):
-        block = range(block_start, min(block_start + block_size, target.num_layers))
-        accumulators: dict[tuple[int, int, int, str], RidgeAccumulator] = {}
-        for target_layer in block:
-            for source_layer in range(source.num_layers):
-                for head in range(target.num_kv_heads):
-                    for kind in ("key", "value"):
-                        accumulators[(target_layer, source_layer, head, kind)] = RidgeAccumulator(
-                            source.head_dim, target.head_dim, dtype=dtype, device=device
-                        )
+        block = list(range(block_start, min(block_start + block_size, target.num_layers)))
+        if checkpoints is not None:
+            restored = checkpoints.load_selection(block_start, block[-1] + 1)
+            if restored is not None:
+                restored_selected, restored_scores = restored
+                for offset, target_layer in enumerate(block):
+                    if len(restored_selected[offset]) != min(config.top_k, source.num_layers):
+                        raise ValueError("selection checkpoint top-k differs from fit config")
+                    if len(restored_scores[offset]) != source.num_layers:
+                        raise ValueError("selection checkpoint source-layer count is invalid")
+                    selected[target_layer] = restored_selected[offset]
+                    all_scores[target_layer] = restored_scores[offset]
+                continue
+        key_accumulator = BatchedSelectionAccumulator(
+            source.num_layers,
+            len(block),
+            target.num_kv_heads,
+            source.head_dim,
+            target.head_dim,
+            dtype=dtype,
+            device=device,
+        )
+        value_accumulator = BatchedSelectionAccumulator(
+            source.num_layers,
+            len(block),
+            target.num_kv_heads,
+            source.head_dim,
+            target.head_dim,
+            dtype=dtype,
+            device=device,
+        )
         pair_count = 0
         for pair_index, raw_pair in enumerate(_iterate(examples)):
             _validate_example(raw_pair, pair_index, source, target)
-            pair = _prepare_pair(raw_pair, config, device)
+            pair = _prepare_pair(raw_pair, config)
             pair_count += 1
-            for target_layer in block:
-                for source_layer in range(source.num_layers):
-                    for head in range(target.num_kv_heads):
-                        accumulators[(target_layer, source_layer, head, "key")].update(
-                            flatten_head_tokens(pair.source.keys[source_layer], head),
-                            flatten_head_tokens(pair.target.keys[target_layer], head),
-                        )
-                        accumulators[(target_layer, source_layer, head, "value")].update(
-                            flatten_head_tokens(pair.source.values[source_layer], head),
-                            flatten_head_tokens(pair.target.values[target_layer], head),
-                        )
+            key_accumulator.update(
+                _stack_selection_layers(pair.source.keys),
+                _stack_selection_layers([pair.target.keys[layer] for layer in block]),
+            )
+            value_accumulator.update(
+                _stack_selection_layers(pair.source.values),
+                _stack_selection_layers([pair.target.values[layer] for layer in block]),
+            )
         if pair_count == 0:
             raise ValueError("at least one calibration pair is required")
-        for target_layer in block:
-            layer_scores: list[float] = []
-            for source_layer in range(source.num_layers):
-                scores = [
-                    accumulators[(target_layer, source_layer, head, kind)]
-                    .solve(config.selection_alpha)
-                    .r2
-                    for head in range(target.num_kv_heads)
-                    for kind in ("key", "value")
-                ]
-                layer_scores.append(sum(scores) / len(scores))
+        combined_scores = (
+            key_accumulator.solve(config.selection_alpha).r2
+            + value_accumulator.solve(config.selection_alpha).r2
+        ).mean(dim=-1) / 2
+        for offset, target_layer in enumerate(block):
+            layer_scores = combined_scores[offset].detach().float().cpu().tolist()
             ranked = sorted(range(source.num_layers), key=layer_scores.__getitem__, reverse=True)
             selected[target_layer] = ranked[: min(config.top_k, source.num_layers)]
             all_scores[target_layer] = layer_scores
+        if checkpoints is not None:
+            checkpoints.save_selection(
+                block_start,
+                block[-1] + 1,
+                [selected[layer] for layer in block],
+                [all_scores[layer] for layer in block],
+            )
     return selected, all_scores
 
 
@@ -128,6 +188,9 @@ def fit_mapper(
     source_signature: ModelSignature,
     target_signature: ModelSignature,
     config: FitConfig | None = None,
+    *,
+    checkpoint_dir: str | Path | None = None,
+    resume: bool = True,
 ) -> CrossModelKVMapper:
     """Fit a cross-model mapper from aligned cache pairs.
 
@@ -144,8 +207,25 @@ def fit_mapper(
     device = torch.device(config.accumulation_device)
     if device.type == "cuda" and not torch.cuda.is_available():
         raise RuntimeError("CUDA accumulation requested by FitConfig but CUDA is unavailable")
+    checkpoints = (
+        FitCheckpointStore(
+            checkpoint_dir,
+            source_signature,
+            target_signature,
+            config,
+            resume=resume,
+        )
+        if checkpoint_dir is not None
+        else None
+    )
     selected, selection_scores = _select_layers(
-        examples, source_signature, target_signature, config, dtype, device
+        examples,
+        source_signature,
+        target_signature,
+        config,
+        dtype,
+        device,
+        checkpoints,
     )
 
     layers = target_signature.num_layers
@@ -155,9 +235,39 @@ def fit_mapper(
     value_biases: list[torch.Tensor | None] = [None] * layers
     key_r2: list[float] = [0.0] * layers
     value_r2: list[float] = [0.0] * layers
+    if checkpoints is not None:
+        for target_layer in range(layers):
+            feature_count = (
+                len(selected[target_layer])
+                * source_signature.num_kv_heads
+                * source_signature.head_dim
+            )
+            restored = checkpoints.load_layer(
+                target_layer,
+                selected[target_layer],
+                weight_shape=(
+                    target_signature.num_kv_heads,
+                    feature_count,
+                    target_signature.head_dim,
+                ),
+                bias_shape=(target_signature.num_kv_heads, target_signature.head_dim),
+            )
+            if restored is not None:
+                key_weights[target_layer] = restored.key_weight
+                value_weights[target_layer] = restored.value_weight
+                key_biases[target_layer] = restored.key_bias
+                value_biases[target_layer] = restored.value_bias
+                key_r2[target_layer] = restored.key_r2
+                value_r2[target_layer] = restored.value_r2
     block_size = config.target_layer_block_size
     for block_start in range(0, layers, block_size):
-        block = range(block_start, min(block_start + block_size, layers))
+        block = [
+            layer
+            for layer in range(block_start, min(block_start + block_size, layers))
+            if key_weights[layer] is None
+        ]
+        if not block:
+            continue
         key_accumulators: dict[int, RidgeAccumulator] = {}
         value_accumulators: dict[int, RidgeAccumulator] = {}
         for target_layer in block:
@@ -176,7 +286,7 @@ def fit_mapper(
         second_pass_count = 0
         for pair_index, raw_pair in enumerate(_iterate(examples)):
             _validate_example(raw_pair, pair_index, source_signature, target_signature)
-            pair = _prepare_pair(raw_pair, config, device)
+            pair = _prepare_pair(raw_pair, config)
             second_pass_count += 1
             for target_layer in block:
                 source_layers = selected[target_layer]
@@ -200,7 +310,7 @@ def fit_mapper(
             key_solution = key_accumulators[target_layer].solve(config.ridge_alpha)
             value_solution = value_accumulators[target_layer].solve(config.ridge_alpha)
             # [features, heads*dim] -> [heads, features, dim]
-            key_weights[target_layer] = (
+            key_weight = (
                 key_solution.weight.reshape(
                     feature_count, target_signature.num_kv_heads, target_signature.head_dim
                 )
@@ -209,7 +319,7 @@ def fit_mapper(
                 .cpu()
                 .contiguous()
             )
-            value_weights[target_layer] = (
+            value_weight = (
                 value_solution.weight.reshape(
                     feature_count, target_signature.num_kv_heads, target_signature.head_dim
                 )
@@ -218,13 +328,13 @@ def fit_mapper(
                 .cpu()
                 .contiguous()
             )
-            key_biases[target_layer] = (
+            key_bias = (
                 key_solution.bias.reshape(target_signature.num_kv_heads, target_signature.head_dim)
                 .float()
                 .cpu()
                 .contiguous()
             )
-            value_biases[target_layer] = (
+            value_bias = (
                 value_solution.bias.reshape(
                     target_signature.num_kv_heads, target_signature.head_dim
                 )
@@ -232,8 +342,25 @@ def fit_mapper(
                 .cpu()
                 .contiguous()
             )
+            key_weights[target_layer] = key_weight
+            value_weights[target_layer] = value_weight
+            key_biases[target_layer] = key_bias
+            value_biases[target_layer] = value_bias
             key_r2[target_layer] = key_solution.r2
             value_r2[target_layer] = value_solution.r2
+            if checkpoints is not None:
+                checkpoints.save_layer(
+                    target_layer,
+                    source_layers,
+                    LayerCheckpoint(
+                        key_weight,
+                        value_weight,
+                        key_bias,
+                        value_bias,
+                        key_r2[target_layer],
+                        value_r2[target_layer],
+                    ),
+                )
 
     if any(item is None for item in (*key_weights, *value_weights, *key_biases, *value_biases)):
         raise RuntimeError("internal error: incomplete target-layer fit")

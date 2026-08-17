@@ -64,11 +64,24 @@ def _host_bytes(caches: list[KVCache]) -> int:
     )
 
 
+def _logical_to_host(tensor: torch.Tensor, logical_batch: int) -> torch.Tensor:
+    """Transfer the fixed-shape XLA result before trimming padded rows.
+
+    Slicing on XLA changes the output graph for a partial final batch.  Large
+    models can then pay another full compilation for every cache output.  Keep
+    the accelerator-side shape stable and perform the inexpensive trim on CPU.
+    """
+    host = tensor.detach().to("cpu")
+    if logical_batch == host.shape[0]:
+        return host
+    return host[:logical_batch].clone()
+
+
 def _sample_to_host(cache: KVCache, *, stride: int, logical_batch: int) -> KVCache:
     sampled = cache.to_content_space().sample_tokens(stride)
     return KVCache(
-        [tensor[:logical_batch].detach().to("cpu") for tensor in sampled.keys],
-        [tensor[:logical_batch].detach().to("cpu") for tensor in sampled.values],
+        [_logical_to_host(tensor, logical_batch) for tensor in sampled.keys],
+        [_logical_to_host(tensor, logical_batch) for tensor in sampled.values],
         keys_are_content=True,
     )
 

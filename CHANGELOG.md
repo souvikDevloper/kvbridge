@@ -10,6 +10,8 @@
 - Use XLA-compatible no-grad capture instead of inference-tensor semantics.
 - Use direct largest-axis SPMD parameter sharding to avoid the unstable
   torch_xla 2.8 experimental FSDPv2 inference wrapper.
+- Preserve fixed accelerator output shapes for padded tail batches by trimming
+  them only after host transfer, avoiding redundant large-model XLA compiles.
 - Add a sequential TPU held-out evaluator and tamper-evident evidence validator.
 - Add pinned 128K and 256K Qwen3 14B→32B TPU configs and a Kaggle/TRC runbook.
 - Expose total sampled-host-cache memory in the scale planner.

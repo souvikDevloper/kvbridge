@@ -94,7 +94,7 @@ def _rotary_module(model: Any) -> Any:
     raise CompatibilityError("model does not expose a supported model-level rotary embedding")
 
 
-@torch.inference_mode()
+@torch.no_grad()
 def capture_rotary_factors(model: Any, position_ids: Tensor) -> RotaryFactors:
     metadata_model = _metadata_model(model)
     rotary = _rotary_module(metadata_model)
@@ -148,7 +148,7 @@ def _canonical_query(output: Any, *, query_heads: int, head_dim: int) -> Tensor:
     raise CompatibilityError(f"unsupported query tensor shape: {tuple(output.shape)}")
 
 
-@torch.inference_mode()
+@torch.no_grad()
 def capture_cache(
     model: Any, input_ids: Tensor, *, attention_mask: Tensor | None = None
 ) -> KVCache:
@@ -175,7 +175,7 @@ def capture_cache(
     return KVCache([layer[0] for layer in layers], [layer[1] for layer in layers], rotary)
 
 
-@torch.inference_mode()
+@torch.no_grad()
 def capture_cache_with_queries(
     model: Any,
     input_ids: Tensor,
@@ -265,7 +265,7 @@ def to_dynamic_cache(cache: KVCache, model: Any) -> Any:
     return dynamic
 
 
-@torch.inference_mode()
+@torch.no_grad()
 def suffix_logits_from_cache(
     model: Any,
     cache: KVCache,
@@ -312,7 +312,7 @@ def suffix_logits_from_cache(
     return cast(Tensor, outputs.logits)
 
 
-@torch.inference_mode()
+@torch.no_grad()
 def greedy_handoff_generate(
     *,
     source_model: Any,

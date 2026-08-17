@@ -6,6 +6,7 @@
 - Add contract-bound, atomic selection-block and target-layer fit checkpoints.
 - Add pre-sampled calibration-pair support to avoid double-striding TPU caches.
 - Add a sequential-residency PyTorch/XLA SPMD FSDPv2 runner for TPU v5e/v6e.
+- Support bare Hugging Face decoder models and FSDPv2-wrapped metadata access.
 - Add a sequential TPU held-out evaluator and tamper-evident evidence validator.
 - Add pinned 128K and 256K Qwen3 14B→32B TPU configs and a Kaggle/TRC runbook.
 - Expose total sampled-host-cache memory in the scale planner.

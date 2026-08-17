@@ -60,6 +60,7 @@ def initialize_xla(
 
 def _decoder_layers(model: Any) -> Any:
     candidates = [
+        getattr(model, "layers", None),
         getattr(getattr(model, "model", None), "layers", None),
         getattr(getattr(getattr(model, "model", None), "model", None), "layers", None),
     ]

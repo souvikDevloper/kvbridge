@@ -25,6 +25,19 @@ class XLAContext:
     runtime_devices: int
 
 
+def logical_to_host(tensor: Tensor, logical_batch: int) -> Tensor:
+    """Transfer a fixed-shape XLA result before trimming padded rows.
+
+    Slicing on XLA changes the output graph for a partial final batch. Large
+    models can then pay another full compilation for every cache output. Keep
+    the accelerator-side shape stable and perform the inexpensive trim on CPU.
+    """
+    host = tensor.detach().to("cpu")
+    if logical_batch == host.shape[0]:
+        return host
+    return host[:logical_batch].clone()
+
+
 def initialize_xla(
     *, min_devices: int = 8, compilation_cache: str | Path | None = None
 ) -> XLAContext:

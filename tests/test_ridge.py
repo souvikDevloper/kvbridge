@@ -51,6 +51,32 @@ def test_float32_centering_is_stable_with_large_feature_offsets() -> None:
     assert solution.r2 > 0.999
 
 
+def test_float32_solve_is_finite_across_extreme_feature_scales() -> None:
+    generator = torch.Generator().manual_seed(19)
+    scales = torch.tensor([1e-3, 1e-1, 1.0, 1e2, 1e4])
+    x = torch.randn(4096, 5, generator=generator) * scales
+    expected_weight = torch.tensor([[2.0], [-0.7], [0.4], [0.003], [-0.00002]])
+    y = x @ expected_weight + 0.25
+    accumulator = RidgeAccumulator(5, 1, dtype=torch.float32)
+
+    for x_shard, y_shard in zip(x.split(128), y.split(128), strict=True):
+        accumulator.update(x_shard, y_shard)
+    solution = accumulator.solve(alpha=0.01)
+
+    assert torch.isfinite(solution.weight).all()
+    assert torch.isfinite(solution.bias).all()
+    assert solution.r2 > 0.999
+
+
+def test_ridge_rejects_non_finite_statistics_before_factorization() -> None:
+    accumulator = RidgeAccumulator(2, 1, dtype=torch.float32)
+    accumulator.update(torch.ones(2, 2), torch.ones(2, 1))
+    accumulator.centered_xtx[0, 0] = torch.inf
+
+    with pytest.raises(FloatingPointError, match="XTX"):
+        accumulator.solve(alpha=0.01)
+
+
 def test_ridge_rejects_unavailable_cuda() -> None:
     if torch.cuda.is_available():
         pytest.skip("CUDA is available on this test host")

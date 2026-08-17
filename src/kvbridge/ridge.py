@@ -185,6 +185,62 @@ class RidgeAccumulator:
         self.centered_yty.copy_(global_yty)
         return self
 
+    @staticmethod
+    def _equilibrated_solve(system: Tensor, right_hand_side: Tensor) -> Tensor:
+        """Solve a ridge system after exact symmetric diagonal equilibration.
+
+        KV features can differ by several orders of magnitude across heads and
+        layers.  Solving the raw normal equations in FP32 can therefore overflow
+        even when both sufficient statistics are finite.  If ``D`` contains the
+        square root of the system diagonal, this routine solves
+
+        ``(D^-1 A D^-1) Z = D^-1 B`` and returns ``D^-1 Z``.
+
+        The transformation is algebraically equivalent to ``A W = B``; it does
+        not change the configured ridge penalty.
+        """
+        diagonal = torch.diagonal(system)
+        if not bool(torch.isfinite(diagonal).all().item()):
+            raise FloatingPointError("ridge system diagonal is non-finite")
+        if bool((diagonal <= 0).any().item()):
+            raise FloatingPointError("ridge system is not positive on its diagonal")
+        scale = torch.sqrt(diagonal)
+        equilibrated = system / scale[:, None] / scale[None, :]
+        equilibrated = (equilibrated + equilibrated.T) * 0.5
+        scaled_rhs = right_hand_side / scale[:, None]
+        factor, info = torch.linalg.cholesky_ex(equilibrated)
+        if int(info.max().item()) == 0:
+            scaled_solution = torch.cholesky_solve(scaled_rhs, factor)
+        else:
+            scaled_solution = torch.linalg.lstsq(equilibrated, scaled_rhs).solution
+        return scaled_solution / scale[:, None]
+
+    @classmethod
+    def _solve_with_recovery(cls, system: Tensor, right_hand_side: Tensor) -> Tensor:
+        """Solve on the configured device, recovering in CPU FP64 if needed."""
+        weight: Tensor | None
+        try:
+            weight = cls._equilibrated_solve(system, right_hand_side)
+        except RuntimeError:
+            weight = None
+        if weight is not None and bool(torch.isfinite(weight).all().item()):
+            return weight
+
+        # A CUDA FP32 factorization may complete without an error code yet
+        # still overflow on a severely conditioned calibration system.  The
+        # recovery is intentionally rare and bounded to one target layer.  It
+        # preserves the same already-accumulated system and configured alpha.
+        recovered = cls._equilibrated_solve(
+            system.detach().to(device="cpu", dtype=torch.float64),
+            right_hand_side.detach().to(device="cpu", dtype=torch.float64),
+        )
+        recovered = recovered.to(device=system.device, dtype=system.dtype)
+        if not bool(torch.isfinite(recovered).all().item()):
+            raise FloatingPointError(
+                "ridge solve remained non-finite after equilibrated CPU FP64 recovery"
+            )
+        return recovered
+
     def solve(self, alpha: float) -> RidgeSolution:
         if self.count < 2:
             raise ValueError("at least two observations are required")
@@ -192,15 +248,22 @@ class RidgeAccumulator:
             raise ValueError("ridge penalty cannot be negative")
         centered_xtx = (self.centered_xtx + self.centered_xtx.T) * 0.5
         centered_xty = self.centered_xty
+        for name, tensor in (
+            ("centered XTX", centered_xtx),
+            ("centered XTY", centered_xty),
+            ("centered YTY", self.centered_yty),
+            ("mean X", self.mean_x),
+            ("mean Y", self.mean_y),
+        ):
+            if not bool(torch.isfinite(tensor).all().item()):
+                raise FloatingPointError(f"ridge {name} statistics are non-finite")
         system = centered_xtx + alpha * torch.eye(
             self.x_features, dtype=self.dtype, device=self.device
         )
-        factor, info = torch.linalg.cholesky_ex(system)
-        if int(info.max().item()) == 0:
-            weight = torch.cholesky_solve(centered_xty, factor)
-        else:
-            weight = torch.linalg.lstsq(system, centered_xty).solution
+        weight = self._solve_with_recovery(system, centered_xty)
         bias = self.mean_y - self.mean_x @ weight
+        if not bool(torch.isfinite(bias).all().item()):
+            raise FloatingPointError("ridge bias is non-finite")
 
         centered_yty = self.centered_yty
         residual = (
@@ -212,4 +275,6 @@ class RidgeAccumulator:
             r2 = 1.0 if residual <= torch.finfo(self.dtype).eps else 0.0
         else:
             r2 = float((1.0 - residual / centered_yty).item())
+        if not torch.isfinite(torch.tensor(r2)):
+            raise FloatingPointError("ridge R2 is non-finite")
         return RidgeSolution(weight, bias, r2, self.count)

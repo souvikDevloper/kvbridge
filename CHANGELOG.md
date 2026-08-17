@@ -12,6 +12,9 @@
   torch_xla 2.8 experimental FSDPv2 inference wrapper.
 - Preserve fixed accelerator output shapes for padded tail batches by trimming
   them only after host transfer, avoiding redundant large-model XLA compiles.
+- Document the observed Kaggle TPU draft-session failure boundary and the
+  revision-pinned background-run mitigation without attributing an unproven
+  provider-side root cause.
 - Add a sequential TPU held-out evaluator and tamper-evident evidence validator.
 - Add pinned 128K and 256K Qwen3 14B→32B TPU configs and a Kaggle/TRC runbook.
 - Expose total sampled-host-cache memory in the scale planner.

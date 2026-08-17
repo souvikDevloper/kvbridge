@@ -42,6 +42,36 @@ persisted as raw public evidence; the revision-bound mapper, checkpoint
 manifest, and `fit_run.json` are. A restarted job must recapture host caches,
 but completed fit blocks are verified and skipped.
 
+## Kaggle interruption boundary
+
+An interactive v5e-8 attempt on 2026-08-17 completed all 500 source sequences
+and then failed while fetching the target-model shards. Kaggle classified the
+event as `Failed`; the frontend observed the provider move the backend to
+`CLOSING` and then close the kernel connection. No Python, XLA, Hugging Face,
+quota, or disk exception was emitted. The last recorded host footprint was
+about 133 GiB on a 377.8 GiB VM, and the account still had about 17 of its 20
+weekly TPU hours available. The attempt was also well below Kaggle's documented
+nine-hour per-session TPU limit. Those facts rule out a demonstrated quota or
+ordinary host-capacity failure, but they do not identify the provider-side root
+cause; VM failure or preemption remains the defensible classification.
+
+The attempt exposed one independent KVBridge defect: slicing the padded final
+batch on XLA changed the output graph and triggered a second large compilation.
+The runner now transfers the fixed-shape result to the host before trimming,
+with a regression test that verifies the operation order. This removes the
+known avoidable time and memory pressure, but it must not be presented as proof
+of the provider-side failure's cause.
+
+For long free-tier attempts, prefer a private **Save & Run All** version over an
+interactive draft, pin the exact Git revision, keep model and compiler caches on
+the large temporary volume, and reserve `/kaggle/working` for final evidence.
+Background execution removes the browser connection from the failure domain;
+it does not make Kaggle capacity non-preemptible. Raw source/target cache capture
+is intentionally RAM-only, so an interruption before fitting requires recapture.
+[Kaggle's persistence announcement](https://www.kaggle.com/discussions/product-feedback/355440)
+describes persistence as best-effort and unable to restore data that exceeds the
+working-volume limit or accelerator memory.
+
 ## Kaggle v5e-8
 
 Create a notebook, enable Internet, select **TPU v5e-8**, then run:

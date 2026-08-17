@@ -1,4 +1,4 @@
-"""Sequential-residency Qwen3 cache calibration and fitting on TPU v3/v6e.
+"""Sequential-residency Qwen3 cache calibration and fitting on TPU v5e/v6e.
 
 Dry-run is the default.  ``--execute`` requires a PyTorch/XLA TPU runtime.
 The source and target never reside on the accelerator together.  Only

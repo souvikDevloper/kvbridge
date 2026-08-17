@@ -176,11 +176,11 @@ Production rollout should progress through:
 
 See [architecture](docs/ARCHITECTURE.md), [experiment protocol](docs/EXPERIMENT_PROTOCOL.md), [Lightning H100/H200 runbook](docs/LIGHTNING_GPU.md), [collaboration tracks](COLLABORATION.md), [threat model](docs/THREAT_MODEL.md), and [production checklist](docs/PRODUCTION_CHECKLIST.md).
 
-### TPU v3/v6e paper-scale path
+### TPU v5e/v6e paper-scale path
 
 The pinned TPU configs define the paper-aligned 128K observation run and an
 exploratory 256K ablation. Both use one portable PyTorch/XLA SPMD pipeline;
-Kaggle v3-8 is the free validation lane and a TRC v6e-8 allocation is the
+Kaggle v5e-8 is the free validation lane and a TRC v6e-8 allocation is the
 recommended full-run lane.
 
 ```bash

@@ -1,6 +1,6 @@
-# TPU v3/v6e scale runbook
+# TPU v5e/v6e scale runbook
 
-KVBridge has one PyTorch/XLA SPMD path for both Kaggle TPU v3-8 and Cloud TPU
+KVBridge has one PyTorch/XLA SPMD path for both Kaggle TPU v5e-8 and Cloud TPU
 v6e-8. Kaggle is the free compatibility and reduced-scale validation lane.
 An approved [TPU Research Cloud](https://sites.research.google/trc/) allocation
 is the no-card route to a full v6e experiment; TRC approval and a particular
@@ -10,13 +10,13 @@ TPU generation are not guaranteed.
 
 | Runtime | Accelerator memory | KVBridge role |
 |---|---:|---|
-| Kaggle TPU v3-8 | 128 GB total high-speed memory | Free SPMD/compiler validation; attempt 128K only if quota and session time allow |
+| Kaggle TPU v5e-8 | 128 GB total high-speed memory | Free SPMD/compiler validation; attempt 128K only if quota and session time allow |
 | TPU v6e-8 | 256 GB HBM, 1.44 TB host RAM | Recommended 14B→32B 128K run and 256K calibration ablation |
 
-Kaggle documents TPU v3-8, not v6e, and currently describes a 20-hour weekly
-TPU quota with a maximum nine-hour session. Treat those limits as provider
-policy that can change and inspect the notebook UI before every run. Google
-documents v6e-8 as one eight-chip, single-VM slice optimized for inference.
+The Kaggle notebook UI exposed TPU v5e-8 with a 20-hour weekly quota on
+2026-08-17. Treat accelerator availability and quotas as provider state that can
+change, and inspect the notebook UI before every run. Google documents v6e-8 as
+one eight-chip, single-VM slice optimized for inference.
 
 Official references: [Kaggle TPU guide](https://www.kaggle.com/docs/tpu),
 [Cloud TPU v6e](https://cloud.google.com/tpu/docs/v6e),
@@ -42,9 +42,9 @@ persisted as raw public evidence; the revision-bound mapper, checkpoint
 manifest, and `fit_run.json` are. A restarted job must recapture host caches,
 but completed fit blocks are verified and skipped.
 
-## Kaggle v3-8
+## Kaggle v5e-8
 
-Create a notebook, enable Internet, select **TPU VM v3-8**, then run:
+Create a notebook, enable Internet, select **TPU v5e-8**, then run:
 
 ```bash
 git clone https://github.com/souvikDevloper/kvbridge.git
@@ -63,7 +63,7 @@ bash scripts/tpu_scale.sh
 
 Do not label an interrupted, fit-only, or quality-rejected run a reproduction.
 Kaggle is industry-valid evidence for numerical correctness on the declared TPU
-v3-8 runtime. It is not NVIDIA/H100 latency evidence.
+v5e-8 runtime. It is not NVIDIA/H100 latency evidence.
 
 ## TRC v6e-8
 
@@ -108,4 +108,4 @@ python experiments/validate_tpu_evidence.py \
 Those diagnostics are intentionally not a complete paper result. Publication
 also requires downstream-retention, long-context, and hardware-local latency
 results under `docs/EXPERIMENT_PROTOCOL.md`. Every table must name the exact TPU
-generation; v3 timings cannot be presented as v6e, H100, or H200 timings.
+generation; v5e timings cannot be presented as v6e, H100, or H200 timings.

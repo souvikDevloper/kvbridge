@@ -56,7 +56,7 @@
   "accelerator": {
     "runtime": "pytorch-xla-spmd",
     "minimum_devices": 8,
-    "kaggle_preflight": "tpu-v3-8",
+    "kaggle_preflight": "tpu-v5e-8",
     "full_run_recommended": "tpu-v6e-8"
   }
 }

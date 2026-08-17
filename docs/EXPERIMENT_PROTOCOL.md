@@ -55,7 +55,7 @@ Evaluate target standalone and transfer on ARC-Challenge, HellaSwag, WinoGrande,
 
 Latency uses 50 warmups and 30 timed trials for each context length from 64 to 32,768 tokens. Record cache movement and mapper execution together; target re-prefill excludes the LM head to match the source paper.
 
-Report latency separately for every accelerator generation. TPU v3/v6e results
+Report latency separately for every accelerator generation. TPU v5e/v6e results
 are valid hardware-local systems evidence but are not substitutes for an H100
 or H200 latency claim. See `docs/TPU_SCALE.md` for the sequential-residency and
 checkpoint protocol.

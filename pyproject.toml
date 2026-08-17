@@ -22,7 +22,9 @@ classifiers = [
   "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
 dependencies = [
-  "numpy>=1.26,<3",
+  # NumPy 2.3 stubs use Python 3.12-only type-alias syntax even when mypy is
+  # validating this package's supported Python 3.10 surface.
+  "numpy>=1.26,<2.3",
   "torch>=2.3",
   "safetensors>=0.4.3",
 ]

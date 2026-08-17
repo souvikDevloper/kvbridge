@@ -17,6 +17,12 @@ from kvbridge.mapper import CrossModelKVMapper
 from kvbridge.planning import ExperimentConfig, build_scale_plan
 from kvbridge.statistics import bootstrap_mean_interval
 
+# safetensors releases have alternated between typed and untyped ``safe_open``
+# exports.  Giving the compatibility boundary one explicit type avoids
+# version-dependent ``no-untyped-call`` / ``unused-ignore`` failures while
+# keeping the rest of this validation module under strict mypy checking.
+_safe_open: Any = safe_open
+
 
 def sha256_file(path: str | Path) -> str:
     """Return a streaming SHA-256 digest for a file."""
@@ -104,7 +110,7 @@ def index_legacy_capture_evidence(
     records: list[dict[str, Any]] = []
     for path in paths:
         try:
-            with safe_open(path, framework="pt", device="cpu") as stream:  # type: ignore[no-untyped-call]
+            with _safe_open(path, framework="pt", device="cpu") as stream:
                 metadata = stream.metadata() or {}
                 names = set(stream.keys())
         except (OSError, SafetensorError) as error:
@@ -258,9 +264,7 @@ def validate_capture_evidence(
         if require_shard_hashes:
             _require(record is not None, f"capture manifest has no record for {path.name}")
         try:
-            with safe_open(  # type: ignore[no-untyped-call]
-                path, framework="pt", device="cpu"
-            ) as stream:
+            with _safe_open(path, framework="pt", device="cpu") as stream:
                 metadata = stream.metadata() or {}
                 names = set(stream.keys())
         except (OSError, SafetensorError) as error:

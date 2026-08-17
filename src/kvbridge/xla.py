@@ -97,8 +97,6 @@ def wrap_model_for_fsdp(model: Any, context: XLAContext) -> Any:
         transformer_auto_wrap_policy,
         transformer_layer_cls={decoder_type},
     )
-    model.to(context.device)
-
     def shard_output(output: Any, mesh: Any) -> None:
         for name in ("last_hidden_state", "logits"):
             tensor = getattr(output, name, None)
